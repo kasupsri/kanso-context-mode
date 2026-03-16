@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kanso-context-mode": {
+      "command": "npx",
+      "args": ["-y", "kanso-context-mode"]
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "name": "kanso-context-mode",
+  "version": "1.0.0",
+  "description": "Disk-first MCP server for token-efficient coding workflows on Windows and macOS.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "context-window",
+    "token-savings",
+    "cursor",
+    "codex",
+    "claude-code",
+    "windows",
+    "macos",
+    "typescript"
+  ],
+  "author": "Kasup Sri",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "kanso-context-mode": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "templates/",
+    "scripts/",
+    "setup.ps1",
+    "setup.sh",
+    "README.md",
+    "BENCHMARK.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:benchmarks": "vitest run --config vitest.bench.config.ts --reporter=verbose",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "validate": "npm run format:check && npm run lint && npm run build && npm test && npm run test:coverage",
+    "lint": "eslint \"src/**/*.ts\" \"tests/kanso/**/*.ts\" \"tests/kanso-benchmarks/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" \"tests/kanso/**/*.ts\" \"tests/kanso-benchmarks/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/kanso/**/*.ts\" \"tests/kanso-benchmarks/**/*.ts\" \"README.md\" \"BENCHMARK.md\" \"CONTRIBUTING.md\" \"HOW_IT_WORKS.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/kanso/**/*.ts\" \"tests/kanso-benchmarks/**/*.ts\" \"README.md\" \"BENCHMARK.md\" \"CONTRIBUTING.md\" \"HOW_IT_WORKS.md\"",
+    "benchmark": "tsx scripts/benchmark.ts",
+    "setup": "node dist/index.js setup",
+    "doctor": "node dist/index.js doctor",
+    "setup:ps1": "powershell -ExecutionPolicy Bypass -File ./setup.ps1",
+    "setup:sh": "bash ./setup.sh",
+    "prepublishOnly": "npm run validate"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^12.6.2",
+    "env-paths": "^3.0.0",
+    "js-tiktoken": "^1.0.21",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/turndown": "^5.0.6",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.39.3",
+    "prettier": "^3.2.5",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kasupsri/kanso-context-mode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kasupsri/kanso-context-mode/issues"
+  },
+  "homepage": "https://github.com/kasupsri/kanso-context-mode#readme"
+}

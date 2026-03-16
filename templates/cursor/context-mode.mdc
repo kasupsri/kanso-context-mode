@@ -1,0 +1,10 @@
+---
+description: Route token-heavy coding work through kanso-context-mode
+globs: ["**/*"]
+alwaysApply: true
+---
+
+Prefer `kanso-context-mode` tools for large outputs and selective retrieval.
+Default to:
+- `response_mode: "minimal"`
+- `max_output_tokens: 400`

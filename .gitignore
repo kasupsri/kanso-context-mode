@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+*.db
+.env
+tests/**/*.js
+tests/**/*.js.map
+tests/**/*.d.ts
+tests/**/*.d.ts.map
+.vscode/mcp.json
+.cursor/
