@@ -161,6 +161,9 @@ export async function editTargetsTool(input: EditTargetsToolInput): Promise<Tool
     .filter(target => target.score > 0)
     .sort((a, b) => b.score - a.score || a.relativePath.localeCompare(b.relativePath))
     .slice(0, parsedMaxFiles ?? 8);
+  const fullRanked = [...ranked.values()]
+    .filter(target => target.score > 0)
+    .sort((a, b) => b.score - a.score || a.relativePath.localeCompare(b.relativePath));
 
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const text =
@@ -199,15 +202,24 @@ export async function editTargetsTool(input: EditTargetsToolInput): Promise<Tool
     sorted.length > 0
       ? getAppState().saveHandle(text, `edit_targets:${input.task.trim()}`).id
       : undefined;
+  const fullRankedText = fullRanked
+    .map(target =>
+      [
+        target.relativePath,
+        `score=${target.score}`,
+        `reasons=${[...target.reasons].join(',')}`,
+        target.lines.size > 0
+          ? `line_hints=${[...target.lines].sort((a, b) => a - b).join(',')}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    )
+    .join('\n\n');
 
   return asToolResult(text, {
-    sourceText: sorted
-      .map(
-        target =>
-          `${target.relativePath}\nscore=${target.score}\nreasons=${[...target.reasons].join(',')}`
-      )
-      .join('\n\n'),
-    candidateText: text,
+    sourceText: fullRankedText || text,
+    candidateText: fullRankedText || text,
     comparisonBasis: 'workspace_source',
     resourceLinks: contextId
       ? [contextResourceLink(contextId, `edit_targets:${input.task.trim()}`)]

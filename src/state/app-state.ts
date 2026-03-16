@@ -15,6 +15,8 @@ import {
 import { HotHandleCache, type HotCacheStats } from './hot-cache.js';
 
 const HANDLE_TOUCH_FLUSH_LIMIT = 64;
+const STATS_SCHEMA_VERSION = 2;
+const STATS_SCHEMA_KEY = 'stats_schema_version';
 
 export interface ContentHandleRow {
   id: string;
@@ -50,6 +52,9 @@ export interface CompressionEventInput {
   inputText?: string;
   candidateText?: string;
   outputText: string;
+  sourceBytes?: number;
+  candidateBytes?: number;
+  outputBytes?: number;
   sourceTokens?: number;
   candidateTokens?: number;
   outputTokens?: number;
@@ -76,12 +81,46 @@ export interface Totals {
   averageLatencyMs: number;
 }
 
-export interface ToolTotals extends Totals {
-  tool: string;
+export interface DerivedMetrics {
+  savedPctOfSource: number;
+  outputPctOfSource: number;
+  sourceToOutputRatio: number | null;
+  avgSavedTokensPerEvent: number;
+  retrievalPctOfSaved: number;
+  compressionPctOfSaved: number;
+  changedPct: number;
+  budgetForcedPct: number;
 }
 
-export interface HostTotals extends Totals {
+export interface StatsLeader {
+  name: string;
+  totalSavedTokens: number;
+  shareOfSavings: number;
+  savedPctOfSource: number;
+  avgSavedTokensPerEvent: number;
+  events: number;
+}
+
+export interface StatsTotals extends Totals, DerivedMetrics {}
+
+export interface ToolTotals extends StatsTotals {
+  tool: string;
+  shareOfSavings: number;
+}
+
+export interface HostTotals extends StatsTotals {
   host: HostId;
+  shareOfSavings: number;
+}
+
+export interface StatsWindow extends StatsTotals {
+  topTool: StatsLeader | null;
+  topHost: StatsLeader | null;
+}
+
+export interface SessionStatsWindow extends StatsWindow {
+  byTool: ToolTotals[];
+  byHost: HostTotals[];
 }
 
 export interface KnowledgeStats {
@@ -175,24 +214,26 @@ export interface SessionResumeSnapshot {
   host: HostId;
   externalSessionId: string | null;
   text: string;
+  fullText: string;
   eventCount: number;
 }
 
 export interface StatsSnapshot {
+  schemaVersion: number;
   generatedAt: string;
   projectRoot: string;
   sessionId: string;
   host: HostId;
   tokenProfile: string;
   tokenMethod: string;
-  session: Totals & { byTool: ToolTotals[]; byHost: HostTotals[] };
+  session: SessionStatsWindow;
   today: {
-    project: Totals;
-    global: Totals;
+    project: StatsWindow;
+    global: StatsWindow;
   };
   allTime: {
-    project: Totals;
-    global: Totals;
+    project: StatsWindow;
+    global: StatsWindow;
   };
   cache: HotCacheStats;
   sessionContinuity: {
@@ -252,6 +293,24 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+function roundMetric(value: number, decimals = 1): number {
+  if (!Number.isFinite(value)) return 0;
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function percent(part: number, whole: number): number {
+  if (!Number.isFinite(part) || !Number.isFinite(whole) || whole <= 0) return 0;
+  return roundMetric((part / whole) * 100, 1);
+}
+
+function ratio(numerator: number, denominator: number): number | null {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+    return null;
+  }
+  return roundMetric(numerator / denominator, 1);
+}
+
 function toTotals(row: AggregateRow | undefined): Totals {
   const events = Number(row?.events ?? 0);
   return {
@@ -272,6 +331,60 @@ function toTotals(row: AggregateRow | undefined): Totals {
     totalSavedTokens: Number(row?.total_saved_tokens_est ?? 0),
     averageLatencyMs: events > 0 ? Math.round(Number(row?.latency_ms_total ?? 0) / events) : 0,
   };
+}
+
+function withDerivedMetrics(totals: Totals): StatsTotals {
+  return {
+    ...totals,
+    savedPctOfSource: percent(totals.totalSavedTokens, totals.sourceTokens),
+    outputPctOfSource: percent(totals.outputTokens, totals.sourceTokens),
+    sourceToOutputRatio: ratio(totals.sourceTokens, totals.outputTokens),
+    avgSavedTokensPerEvent:
+      totals.events > 0 ? roundMetric(totals.totalSavedTokens / totals.events, 1) : 0,
+    retrievalPctOfSaved: percent(totals.retrievalSavedTokens, totals.totalSavedTokens),
+    compressionPctOfSaved: percent(totals.compressionSavedTokens, totals.totalSavedTokens),
+    changedPct: percent(totals.changedEvents, totals.events),
+    budgetForcedPct: percent(totals.budgetForcedEvents, totals.events),
+  };
+}
+
+function enrichToolTotals(rows: ToolTotals[], totalSavedTokens: number): ToolTotals[] {
+  return rows.map(row => ({
+    ...row,
+    shareOfSavings: percent(row.totalSavedTokens, totalSavedTokens),
+  }));
+}
+
+function enrichHostTotals(rows: HostTotals[], totalSavedTokens: number): HostTotals[] {
+  return rows.map(row => ({
+    ...row,
+    shareOfSavings: percent(row.totalSavedTokens, totalSavedTokens),
+  }));
+}
+
+function pickLeader<T extends { totalSavedTokens: number; events: number }>(
+  rows: T[],
+  getName: (row: T) => string
+): StatsLeader | null {
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    name: getName(row),
+    totalSavedTokens: row.totalSavedTokens,
+    shareOfSavings: 'shareOfSavings' in row ? Number(row.shareOfSavings ?? 0) : 0,
+    savedPctOfSource: 'savedPctOfSource' in row ? Number(row.savedPctOfSource ?? 0) : 0,
+    avgSavedTokensPerEvent:
+      'avgSavedTokensPerEvent' in row ? Number(row.avgSavedTokensPerEvent ?? 0) : 0,
+    events: row.events,
+  };
+}
+
+function formatPct(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
+function formatRatio(value: number | null): string {
+  return value === null ? 'n/a' : `${value.toFixed(1)}x`;
 }
 
 function sanitizeSearchQuery(query: string): string {
@@ -387,6 +500,7 @@ export class AppState {
     });
 
     this.initSchema();
+    this.ensureStatsSchemaVersion();
     this.ensureProject();
     this.sessionId = this.createSession();
     this.cleanup();
@@ -584,12 +698,15 @@ export class AppState {
     const sourceText = input.sourceText ?? candidateText;
     const outputText = input.outputText;
 
-    const candidateBytes = Buffer.byteLength(candidateText, 'utf8');
-    const outputBytes = Buffer.byteLength(outputText, 'utf8');
+    const candidateBytes = Math.max(
+      input.candidateBytes ?? Buffer.byteLength(candidateText, 'utf8'),
+      0
+    );
+    const outputBytes = Math.max(input.outputBytes ?? Buffer.byteLength(outputText, 'utf8'), 0);
     const candidateTokens = input.candidateTokens ?? estimateTokens(candidateText).tokens;
     const outputTokens = input.outputTokens ?? estimateTokens(outputText).tokens;
     const sourceBytes = Math.max(
-      Buffer.byteLength(sourceText, 'utf8'),
+      input.sourceBytes ?? Buffer.byteLength(sourceText, 'utf8'),
       candidateBytes,
       outputBytes
     );
@@ -1230,7 +1347,8 @@ export class AppState {
       .filter(Boolean)
       .join('\n');
 
-    let text = sections;
+    const fullText = sections;
+    let text = fullText;
     while (Buffer.byteLength(text, 'utf8') > maxBytes && text.length > 64) {
       text = text.slice(0, Math.floor(text.length * 0.9));
     }
@@ -1248,13 +1366,14 @@ export class AppState {
       host,
       externalSessionId,
       text,
+      fullText,
       eventCount: rows.length,
     };
   }
 
   getStatsSnapshot(): StatsSnapshot {
     const resolvedProfile = resolveTokenProfile();
-    const session = toTotals(
+    const sessionTotals = toTotals(
       this.db
         .prepare(
           `SELECT
@@ -1280,7 +1399,7 @@ export class AppState {
         .get(this.sessionId) as AggregateRow
     );
 
-    const byTool = this.db
+    const sessionByToolRows = this.db
       .prepare(
         `SELECT
           tool,
@@ -1307,7 +1426,7 @@ export class AppState {
       )
       .all(this.sessionId) as Array<AggregateRow & { tool: string }>;
 
-    const byHost = this.db
+    const sessionByHostRows = this.db
       .prepare(
         `SELECT
           host,
@@ -1355,6 +1474,54 @@ export class AppState {
       FROM daily_rollups
       WHERE scope = ? AND scope_id = ? AND (? = '' OR day = ?)`
     );
+    const rollupByToolQuery = this.db.prepare(
+      `SELECT
+        tool,
+        COALESCE(SUM(events), 0) AS events,
+        COALESCE(SUM(changed_events), 0) AS changed_events,
+        COALESCE(SUM(budget_forced_events), 0) AS budget_forced_events,
+        COALESCE(SUM(source_bytes), 0) AS source_bytes,
+        COALESCE(SUM(candidate_bytes), 0) AS candidate_bytes,
+        COALESCE(SUM(output_bytes), 0) AS output_bytes,
+        COALESCE(SUM(source_tokens_est), 0) AS source_tokens_est,
+        COALESCE(SUM(candidate_tokens_est), 0) AS candidate_tokens_est,
+        COALESCE(SUM(output_tokens_est), 0) AS output_tokens_est,
+        COALESCE(SUM(retrieval_saved_bytes), 0) AS retrieval_saved_bytes,
+        COALESCE(SUM(compression_saved_bytes), 0) AS compression_saved_bytes,
+        COALESCE(SUM(total_saved_bytes), 0) AS total_saved_bytes,
+        COALESCE(SUM(retrieval_saved_tokens_est), 0) AS retrieval_saved_tokens_est,
+        COALESCE(SUM(compression_saved_tokens_est), 0) AS compression_saved_tokens_est,
+        COALESCE(SUM(total_saved_tokens_est), 0) AS total_saved_tokens_est,
+        COALESCE(SUM(latency_ms_total), 0) AS latency_ms_total
+      FROM daily_rollups
+      WHERE scope = ? AND scope_id = ? AND (? = '' OR day = ?)
+      GROUP BY tool
+      ORDER BY total_saved_tokens_est DESC, tool ASC`
+    );
+    const rollupByHostQuery = this.db.prepare(
+      `SELECT
+        host,
+        COALESCE(SUM(events), 0) AS events,
+        COALESCE(SUM(changed_events), 0) AS changed_events,
+        COALESCE(SUM(budget_forced_events), 0) AS budget_forced_events,
+        COALESCE(SUM(source_bytes), 0) AS source_bytes,
+        COALESCE(SUM(candidate_bytes), 0) AS candidate_bytes,
+        COALESCE(SUM(output_bytes), 0) AS output_bytes,
+        COALESCE(SUM(source_tokens_est), 0) AS source_tokens_est,
+        COALESCE(SUM(candidate_tokens_est), 0) AS candidate_tokens_est,
+        COALESCE(SUM(output_tokens_est), 0) AS output_tokens_est,
+        COALESCE(SUM(retrieval_saved_bytes), 0) AS retrieval_saved_bytes,
+        COALESCE(SUM(compression_saved_bytes), 0) AS compression_saved_bytes,
+        COALESCE(SUM(total_saved_bytes), 0) AS total_saved_bytes,
+        COALESCE(SUM(retrieval_saved_tokens_est), 0) AS retrieval_saved_tokens_est,
+        COALESCE(SUM(compression_saved_tokens_est), 0) AS compression_saved_tokens_est,
+        COALESCE(SUM(total_saved_tokens_est), 0) AS total_saved_tokens_est,
+        COALESCE(SUM(latency_ms_total), 0) AS latency_ms_total
+      FROM daily_rollups
+      WHERE scope = ? AND scope_id = ? AND (? = '' OR day = ?)
+      GROUP BY host
+      ORDER BY total_saved_tokens_est DESC, host ASC`
+    );
 
     const continuity = this.db
       .prepare(
@@ -1364,7 +1531,62 @@ export class AppState {
       )
       .get(this.projectId, this.projectId) as { events: number; snapshots: number };
 
+    const session = withDerivedMetrics(sessionTotals);
+    const byTool = enrichToolTotals(
+      sessionByToolRows.map(row => ({
+        tool: row.tool,
+        shareOfSavings: 0,
+        ...withDerivedMetrics(toTotals(row)),
+      })),
+      session.totalSavedTokens
+    );
+    const byHost = enrichHostTotals(
+      sessionByHostRows.map(row => ({
+        host: row.host,
+        shareOfSavings: 0,
+        ...withDerivedMetrics(toTotals(row)),
+      })),
+      session.totalSavedTokens
+    );
+
+    const buildWindow = (scope: 'project' | 'global', scopeId: string, day = ''): StatsWindow => {
+      const totals = withDerivedMetrics(
+        toTotals(rollupQuery.get(scope, scopeId, day, day) as AggregateRow)
+      );
+      const toolRows = enrichToolTotals(
+        (
+          rollupByToolQuery.all(scope, scopeId, day, day) as Array<AggregateRow & { tool: string }>
+        ).map(row => ({
+          tool: row.tool,
+          shareOfSavings: 0,
+          ...withDerivedMetrics(toTotals(row)),
+        })),
+        totals.totalSavedTokens
+      );
+      const hostRows = enrichHostTotals(
+        (
+          rollupByHostQuery.all(scope, scopeId, day, day) as Array<
+            AggregateRow & {
+              host: HostId;
+            }
+          >
+        ).map(row => ({
+          host: row.host,
+          shareOfSavings: 0,
+          ...withDerivedMetrics(toTotals(row)),
+        })),
+        totals.totalSavedTokens
+      );
+
+      return {
+        ...totals,
+        topTool: pickLeader(toolRows, row => row.tool),
+        topHost: pickLeader(hostRows, row => row.host),
+      };
+    };
+
     return {
+      schemaVersion: STATS_SCHEMA_VERSION,
       generatedAt: nowIso(),
       projectRoot: this.projectRoot,
       sessionId: this.sessionId,
@@ -1373,20 +1595,18 @@ export class AppState {
       tokenMethod: resolvedProfile.method,
       session: {
         ...session,
-        byTool: byTool.map(row => ({ tool: row.tool, ...toTotals(row) })),
-        byHost: byHost.map(row => ({ host: row.host, ...toTotals(row) })),
+        byTool,
+        byHost,
+        topTool: pickLeader(byTool, row => row.tool),
+        topHost: pickLeader(byHost, row => row.host),
       },
       today: {
-        project: toTotals(
-          rollupQuery.get('project', this.projectId, todayKey(), todayKey()) as AggregateRow
-        ),
-        global: toTotals(
-          rollupQuery.get('global', 'global', todayKey(), todayKey()) as AggregateRow
-        ),
+        project: buildWindow('project', this.projectId, todayKey()),
+        global: buildWindow('global', 'global', todayKey()),
       },
       allTime: {
-        project: toTotals(rollupQuery.get('project', this.projectId, '', '') as AggregateRow),
-        global: toTotals(rollupQuery.get('global', 'global', '', '') as AggregateRow),
+        project: buildWindow('project', this.projectId),
+        global: buildWindow('global', 'global'),
       },
       cache: this.hotCache.stats(),
       sessionContinuity: {
@@ -1398,21 +1618,31 @@ export class AppState {
 
   formatStatsReport(responseMode: 'minimal' | 'full'): string {
     const snapshot = this.getStatsSnapshot();
+    const sessionTopTool = snapshot.session.topTool;
     if (responseMode === 'minimal') {
       return [
         'stats_report',
         `host=${snapshot.host}`,
         `saved_tok=${snapshot.session.totalSavedTokens}`,
+        `saved_pct=${snapshot.session.savedPctOfSource.toFixed(1)}`,
+        `output_pct=${snapshot.session.outputPctOfSource.toFixed(1)}`,
+        `ratio_x=${snapshot.session.sourceToOutputRatio?.toFixed(1) ?? 'n/a'}`,
         `retrieval_tok=${snapshot.session.retrievalSavedTokens}`,
         `compression_tok=${snapshot.session.compressionSavedTokens}`,
         `today_tok=${snapshot.today.project.totalSavedTokens}`,
         `all_time_tok=${snapshot.allTime.project.totalSavedTokens}`,
+        `top_tool=${sessionTopTool?.name ?? 'n/a'}`,
+        `top_tool_share=${sessionTopTool?.shareOfSavings.toFixed(1) ?? '0.0'}`,
         `profile=${snapshot.tokenProfile}`,
         `method=${snapshot.tokenMethod}`,
       ].join(' ');
     }
 
-    const renderWindow = (label: string, totals: Totals): string[] => [
+    const renderLeader = (label: string, leader: StatsLeader | null): string =>
+      leader
+        ? `${label}: ${leader.name} (${formatPct(leader.shareOfSavings)} share, ${formatTokenCount(leader.totalSavedTokens)})`
+        : `${label}: n/a`;
+    const renderWindow = (label: string, totals: StatsWindow): string[] => [
       label,
       `  Events:              ${totals.events}`,
       `  Source:              ${formatTokenCount(totals.sourceTokens)} (${formatBytes(totals.sourceBytes)})`,
@@ -1421,37 +1651,65 @@ export class AppState {
       `  Retrieval saved:     ${formatTokenCount(totals.retrievalSavedTokens)} (${formatBytes(totals.retrievalSavedBytes)})`,
       `  Compression saved:   ${formatTokenCount(totals.compressionSavedTokens)} (${formatBytes(totals.compressionSavedBytes)})`,
       `  Total saved:         ${formatTokenCount(totals.totalSavedTokens)} (${formatBytes(totals.totalSavedBytes)})`,
-      `  Changed:             ${totals.changedEvents}`,
-      `  Budget forced:       ${totals.budgetForcedEvents}`,
+      `  Saved % of source:   ${formatPct(totals.savedPctOfSource)}`,
+      `  Output % of source:  ${formatPct(totals.outputPctOfSource)}`,
+      `  Reduction ratio:     ${formatRatio(totals.sourceToOutputRatio)}`,
+      `  Retrieval split:     ${formatPct(totals.retrievalPctOfSaved)}`,
+      `  Compression split:   ${formatPct(totals.compressionPctOfSaved)}`,
+      `  Avg saved / event:   ${formatTokenCount(Math.round(totals.avgSavedTokensPerEvent))}`,
+      `  Changed:             ${totals.changedEvents} (${formatPct(totals.changedPct)})`,
+      `  Budget forced:       ${totals.budgetForcedEvents} (${formatPct(totals.budgetForcedPct)})`,
       `  Avg latency:         ${totals.averageLatencyMs}ms`,
+      `  ${renderLeader('Top tool', totals.topTool)}`,
+      `  ${renderLeader('Top host', totals.topHost)}`,
     ];
 
-    const lines = [
+    const baseLines = [
       '=== Kanso Context Mode Stats Report ===',
       `Project root: ${snapshot.projectRoot}`,
       `Session: ${snapshot.sessionId}`,
       `Resolved host: ${snapshot.host}`,
+      `Stats schema: v${snapshot.schemaVersion}`,
       `Token estimator: ${snapshot.tokenProfile} (${snapshot.tokenMethod})`,
       'All token counts below are estimated.',
+    ];
+
+    if (snapshot.session.events === 0 && snapshot.allTime.project.events === 0) {
+      return [
+        ...baseLines,
+        '',
+        'No tracked Kanso activity yet.',
+        'Use tools like read_file, workspace_search, git_focus, execute, or web_search, then run stats_report again.',
+        '',
+        'HOT CACHE',
+        `  Entries: ${snapshot.cache.entries}/${snapshot.cache.maxEntries}`,
+        `  Memory:  ${formatBytes(snapshot.cache.bytes)} / ${formatBytes(snapshot.cache.maxBytes)}`,
+        `  TTL:     ${Math.round(snapshot.cache.ttlMs / 1000)}s`,
+        `  Hits:    ${snapshot.cache.hits}`,
+        `  Misses:  ${snapshot.cache.misses}`,
+      ].join('\n');
+    }
+
+    const lines = [
+      ...baseLines,
+      '',
+      'SUMMARY',
+      `  Saved:               ${formatTokenCount(snapshot.session.totalSavedTokens)} (${formatPct(snapshot.session.savedPctOfSource)} of source)`,
+      `  Final output:        ${formatTokenCount(snapshot.session.outputTokens)} (${formatPct(snapshot.session.outputPctOfSource)} of source)`,
+      `  Reduction:           ${formatRatio(snapshot.session.sourceToOutputRatio)}`,
+      `  Retrieval vs comp.:  ${formatPct(snapshot.session.retrievalPctOfSaved)} / ${formatPct(snapshot.session.compressionPctOfSaved)}`,
+      `  Top tool:            ${sessionTopTool ? `${sessionTopTool.name} (${formatPct(sessionTopTool.shareOfSavings)} of session savings)` : 'n/a'}`,
       '',
       ...renderWindow('SESSION', snapshot.session),
       '',
       'BY TOOL',
       ...snapshot.session.byTool.map(tool => {
-        const pct =
-          tool.sourceTokens > 0
-            ? ((tool.totalSavedTokens / tool.sourceTokens) * 100).toFixed(0)
-            : '0';
-        return `  ${tool.tool.padEnd(18)} ${formatTokenCount(tool.totalSavedTokens).padStart(12)} saved  ${pct.padStart(3)}%  ${tool.events} event${tool.events === 1 ? '' : 's'}`;
+        return `  ${tool.tool.padEnd(18)} ${formatTokenCount(tool.totalSavedTokens).padStart(12)}  saved=${formatPct(tool.savedPctOfSource).padStart(6)}  share=${formatPct(tool.shareOfSavings).padStart(6)}  avg=${formatTokenCount(Math.round(tool.avgSavedTokensPerEvent)).padStart(12)}  events=${tool.events}`;
       }),
       '',
       'BY HOST',
       ...snapshot.session.byHost.map(host => {
-        const pct =
-          host.sourceTokens > 0
-            ? ((host.totalSavedTokens / host.sourceTokens) * 100).toFixed(0)
-            : '0';
-        return `  ${host.host.padEnd(18)} ${formatTokenCount(host.totalSavedTokens).padStart(12)} saved  ${pct.padStart(3)}%  ${host.events} event${host.events === 1 ? '' : 's'}`;
+        return `  ${host.host.padEnd(18)} ${formatTokenCount(host.totalSavedTokens).padStart(12)}  saved=${formatPct(host.savedPctOfSource).padStart(6)}  share=${formatPct(host.shareOfSavings).padStart(6)}  avg=${formatTokenCount(Math.round(host.avgSavedTokensPerEvent)).padStart(12)}  events=${host.events}`;
       }),
       '',
       ...renderWindow('TODAY (PROJECT)', snapshot.today.project),
@@ -1502,8 +1760,35 @@ export class AppState {
     this.db.close();
   }
 
+  private ensureStatsSchemaVersion(): void {
+    const row = this.db
+      .prepare('SELECT value FROM app_metadata WHERE key = ?')
+      .get(STATS_SCHEMA_KEY) as { value: string } | undefined;
+    if (row?.value === String(STATS_SCHEMA_VERSION)) return;
+
+    const stamp = nowIso();
+    const reset = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM compression_events').run();
+      this.db.prepare('DELETE FROM daily_rollups').run();
+      this.db
+        .prepare(
+          `INSERT INTO app_metadata (key, value, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        )
+        .run(STATS_SCHEMA_KEY, String(STATS_SCHEMA_VERSION), stamp);
+    });
+    reset();
+  }
+
   private initSchema(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS app_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
         root_path TEXT NOT NULL UNIQUE,

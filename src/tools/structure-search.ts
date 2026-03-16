@@ -1,5 +1,6 @@
 import { spawnSync } from 'child_process';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { normalizeIncomingPath } from '../utils/path-input.js';
 
@@ -49,16 +50,18 @@ function parseAstGrepOutput(stdout: string): Array<Record<string, unknown>> {
     .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
-export function structureSearchTool(input: StructureSearchToolInput): string {
+export function structureSearchTool(input: StructureSearchToolInput): ToolExecutionResult {
   if (!input.pattern?.trim()) {
-    return 'Error: structure_search requires "pattern"';
+    return asToolResult('Error: structure_search requires "pattern"');
   }
 
   const parsedMaxMatches = parsePositiveInteger(input.max_matches, 'structure_search.max_matches');
-  if (typeof parsedMaxMatches === 'string') return parsedMaxMatches;
+  if (typeof parsedMaxMatches === 'string') return asToolResult(parsedMaxMatches);
   const binary = astGrepBinary();
   if (!binary) {
-    return 'Error: ast-grep CLI is not available. Install "ast-grep" or "sg" to use structure_search.';
+    return asToolResult(
+      'Error: ast-grep CLI is not available. Install "ast-grep" or "sg" to use structure_search.'
+    );
   }
 
   const rootPath = normalizeIncomingPath(input.path ?? process.cwd());
@@ -75,26 +78,34 @@ export function structureSearchTool(input: StructureSearchToolInput): string {
   });
 
   if (result.status !== 0 && result.status !== 1) {
-    return `Error: ast-grep failed: ${result.stderr || result.stdout || `exit ${result.status}`}`;
+    return asToolResult(
+      `Error: ast-grep failed: ${result.stderr || result.stdout || `exit ${result.status}`}`
+    );
   }
 
   const matches = parseAstGrepOutput(result.stdout).slice(0, parsedMaxMatches ?? 20);
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
 
   if (responseMode === 'minimal') {
-    return [
-      'ok:structure_search',
-      `path=${rootPath}`,
-      `matches=${matches.length}`,
-      ...matches.slice(0, 8).map(match => {
-        const file = typeof match['file'] === 'string' ? match['file'] : 'unknown';
-        const start = (match['range'] as { start?: { line?: number } } | undefined)?.start?.line;
-        return `${file}:${typeof start === 'number' ? start + 1 : '?'}`;
-      }),
-    ].join('\n');
+    return asToolResult(
+      [
+        'ok:structure_search',
+        `path=${rootPath}`,
+        `matches=${matches.length}`,
+        ...matches.slice(0, 8).map(match => {
+          const file = typeof match['file'] === 'string' ? match['file'] : 'unknown';
+          const start = (match['range'] as { start?: { line?: number } } | undefined)?.start?.line;
+          return `${file}:${typeof start === 'number' ? start + 1 : '?'}`;
+        }),
+      ].join('\n'),
+      {
+        sourceText: result.stdout,
+        comparisonBasis: 'workspace_source',
+      }
+    );
   }
 
-  return [
+  const text = [
     '=== Structure Search ===',
     `path: ${rootPath}`,
     `pattern: ${input.pattern}`,
@@ -110,4 +121,10 @@ export function structureSearchTool(input: StructureSearchToolInput): string {
       return `- ${file}:${start}-${end}\n${typeof lines === 'string' ? lines.trim() : ''}`;
     }),
   ].join('\n');
+
+  return asToolResult(text, {
+    sourceText: result.stdout,
+    candidateText: text,
+    comparisonBasis: 'workspace_source',
+  });
 }

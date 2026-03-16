@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 
 export interface DiagnosticsFocusToolInput {
@@ -223,10 +224,10 @@ function parseLine(
   return undefined;
 }
 
-export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): string {
+export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): ToolExecutionResult {
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const parsedMaxItems = parsePositiveInteger(input.max_items, 'diagnostics_focus.max_items');
-  if (typeof parsedMaxItems === 'string') return parsedMaxItems;
+  if (typeof parsedMaxItems === 'string') return asToolResult(parsedMaxItems);
   const maxItems = parsedMaxItems ?? 30;
   const includeExamples = input.include_examples ?? true;
 
@@ -255,14 +256,20 @@ export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): string {
   const warnings = issues.filter(i => i.severity === 'warning').length;
 
   if (responseMode === 'minimal') {
-    return [
-      'ok:diagnostics_focus',
-      `format=${detectedFormat}`,
-      `issues=${issues.length}`,
-      `errors=${errors}`,
-      `warnings=${warnings}`,
-      `shown=${shown.length}`,
-    ].join(' ');
+    return asToolResult(
+      [
+        'ok:diagnostics_focus',
+        `format=${detectedFormat}`,
+        `issues=${issues.length}`,
+        `errors=${errors}`,
+        `warnings=${warnings}`,
+        `shown=${shown.length}`,
+      ].join(' '),
+      {
+        sourceText: input.content,
+        comparisonBasis: 'raw_log',
+      }
+    );
   }
 
   const out = shown.map(issue => {
@@ -277,7 +284,7 @@ export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): string {
     return `${base}\n  sample: ${issue.sample}`;
   });
 
-  return [
+  const text = [
     '=== Diagnostics Focus ===',
     `format: ${detectedFormat}`,
     `input_lines: ${lines.length}`,
@@ -287,4 +294,10 @@ export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): string {
     `showing: ${shown.length}`,
     out.join('\n'),
   ].join('\n');
+
+  return asToolResult(text, {
+    sourceText: input.content,
+    candidateText: text,
+    comparisonBasis: 'raw_log',
+  });
 }

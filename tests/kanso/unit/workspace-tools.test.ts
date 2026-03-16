@@ -48,7 +48,7 @@ describe('workspace tools', () => {
     );
 
     const tree = await treeFocusTool({ path: root, response_mode: 'full' });
-    expect(tree).toContain('billing.ts');
+    expect(tree.text).toContain('billing.ts');
 
     const targets = await editTargetsTool({
       task: 'update billing invoice logic',

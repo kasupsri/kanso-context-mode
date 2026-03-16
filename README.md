@@ -13,7 +13,7 @@ It focuses on one job: keep noisy tool output out of the model context window wi
 - Sandboxed code execution with OS-aware shell selection.
 - Focused tools for logs, diffs, code navigation, workspace search, terminal history, and token reporting.
 - Optional provider-based web search with durable caching.
-- Durable local stats so you can see how many estimated tokens were saved so far.
+- Durable local stats with saved %, final output %, reduction ratio, and top-saving tool breakdowns.
 
 ## Why This Exists
 
@@ -167,7 +167,26 @@ Supported providers:
 
 ## Stats Model
 
-`stats_report` shows estimated savings for:
+`stats_report` is built around one question:
+
+"How many tokens did Kanso keep out of the model context, what percent was that, and which tools did the work?"
+
+Every tracked tool call is measured in three stages:
+
+- `source`: the broad raw baseline Kanso avoided sending
+- `candidate`: the tool's focused text before final response optimization
+- `output`: the final text returned to the host
+
+From those stages, Kanso derives:
+
+- saved % of source
+- final output % of source
+- source-to-output reduction ratio
+- retrieval vs compression split
+- average saved tokens per event
+- top-saving tool and its share of session savings
+
+`stats_report` shows those metrics for:
 
 - current session
 - today for this project
@@ -177,11 +196,34 @@ Supported providers:
 
 Kanso labels token counts as estimated because hosts do not consistently expose exact tokenizer or prompt-cache usage for every MCP call.
 
+If a tool is already very focused, its savings may legitimately be low or `0%`. That is not necessarily a bug; it often means the tool was already returning a narrow result.
+
+`stats_export` writes the same snapshot to JSON, including a `schemaVersion` and the derived metrics above.
+
 From a local checkout, you can print the same report in your terminal with:
 
 ```bash
 npm run stats
 ```
+
+## What Savings To Expect
+
+The bundled full-tool benchmark currently covers all 24 exposed tools, including 20 tracked savings tools and 4 operational `n/a` tools.
+
+Conservative local benchmark expectations today:
+
+- aggregate tracked savings: `84.6%`
+- compression and execution tools: `0.0% - 98.9%` per tool, `93.8%` aggregate
+- retrieval and navigation tools: `0.0% - 94.7%` per tool, `63.6%` aggregate
+- knowledge and web tools: `0.0% - 45.8%` per tool, `11.6%` aggregate
+
+Those ranges are intentionally conservative:
+
+- some tools already return narrow outputs, so their savings can be near zero
+- some tools save mostly through retrieval, not through a tiny final rendered response
+- all published numbers come from deterministic local fixtures or mocks, not marketing estimates
+
+For the per-tool stress matrix and reproduction steps, see [BENCHMARK.md](./BENCHMARK.md).
 
 ## Memory Strategy
 

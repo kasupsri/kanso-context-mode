@@ -104,7 +104,7 @@ const COMPARISON_BASIS_BY_TOOL: Record<string, ComparisonBasis> = {
   workspace_search: 'workspace_source',
 };
 
-const TOOLS: Tool[] = [
+export const TOOLS: Tool[] = [
   {
     name: 'index',
     description: 'Index local or inline content into the local knowledge base.',
@@ -782,6 +782,11 @@ export function createServer() {
           sourceText: toolResult.sourceText,
           candidateText: trackingCandidateText,
           outputText,
+          sourceBytes: toolResult.tracking?.sourceBytes,
+          candidateBytes: toolResult.tracking?.candidateBytes,
+          outputBytes: toolResult.tracking?.outputBytes,
+          sourceTokens: toolResult.tracking?.sourceTokens,
+          candidateTokens: toolResult.tracking?.candidateTokens,
           outputTokens,
           comparisonBasis: toolResult.comparisonBasis ?? defaultComparisonBasis(toolName),
         });

@@ -15,9 +15,9 @@ describe('diagnostics_focus', () => {
       response_mode: 'full',
     });
 
-    expect(result).toContain('TS2322');
-    expect(result).toContain('TS2554');
-    expect(result).toContain('FAIL tests/demo.test.ts');
-    expect(result).toContain('fails fast');
+    expect(result.text).toContain('TS2322');
+    expect(result.text).toContain('TS2554');
+    expect(result.text).toContain('FAIL tests/demo.test.ts');
+    expect(result.text).toContain('fails fast');
   });
 });

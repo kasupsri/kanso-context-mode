@@ -3,6 +3,7 @@ import { stat } from 'fs/promises';
 import { promisify } from 'util';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { evaluateFilePath } from '../security/policy.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { normalizeIncomingPath } from '../utils/path-input.js';
 
@@ -189,64 +190,76 @@ function compactStatus(statuses: Set<string>): string {
   return [...statuses].join(',');
 }
 
-export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<string> {
+export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<ToolExecutionResult> {
   const repoPath = normalizeIncomingPath(input.repo_path ?? process.cwd());
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const parsedMaxFiles = parsePositiveInteger(input.max_files, 'git_focus.max_files');
-  if (typeof parsedMaxFiles === 'string') return parsedMaxFiles;
+  if (typeof parsedMaxFiles === 'string') return asToolResult(parsedMaxFiles);
   const parsedMaxHunks = parsePositiveInteger(
     input.max_hunks_per_file,
     'git_focus.max_hunks_per_file'
   );
-  if (typeof parsedMaxHunks === 'string') return parsedMaxHunks;
+  if (typeof parsedMaxHunks === 'string') return asToolResult(parsedMaxHunks);
   const maxFiles = parsedMaxFiles ?? 50;
   const maxHunksPerFile = parsedMaxHunks ?? 3;
   const includeHunks = input.include_hunks ?? true;
 
   const denied = evaluateFilePath(repoPath);
   if (denied.denied) {
-    return `Blocked by security policy: file path matches "${denied.matchedPattern}"`;
+    return asToolResult(`Blocked by security policy: file path matches "${denied.matchedPattern}"`);
   }
 
   try {
     const st = await stat(repoPath);
     if (!st.isDirectory()) {
-      return `Error: repo_path "${repoPath}" is not a directory`;
+      return asToolResult(`Error: repo_path "${repoPath}" is not a directory`);
     }
   } catch (err) {
-    return `Error: cannot access repo_path "${repoPath}": ${String(err)}`;
+    return asToolResult(`Error: cannot access repo_path "${repoPath}": ${String(err)}`);
   }
 
   if (input.base_ref && !validateRef(input.base_ref)) {
-    return 'Error: git_focus.base_ref contains unsupported characters';
+    return asToolResult('Error: git_focus.base_ref contains unsupported characters');
   }
 
   const repoErr = await ensureRepo(repoPath);
-  if (repoErr) return repoErr;
+  if (repoErr) return asToolResult(repoErr);
 
   const summaries = new Map<string, FileSummary>();
+  const sourceChunks: string[] = [];
   const baseRef = input.base_ref?.trim() || undefined;
   const scope = input.scope ?? 'working';
 
   try {
     if (baseRef) {
       const data = await collectDiff(repoPath, { baseRef });
+      sourceChunks.push(data.numstat, data.nameStatus, data.patch);
       mergeNumstat(summaries, data.numstat);
       mergeNameStatus(summaries, data.nameStatus);
       mergePatch(summaries, data.patch, maxHunksPerFile, includeHunks);
     } else if (scope === 'staged') {
       const data = await collectDiff(repoPath, { staged: true });
+      sourceChunks.push(data.numstat, data.nameStatus, data.patch);
       mergeNumstat(summaries, data.numstat);
       mergeNameStatus(summaries, data.nameStatus);
       mergePatch(summaries, data.patch, maxHunksPerFile, includeHunks);
     } else if (scope === 'unstaged') {
       const data = await collectDiff(repoPath, {});
+      sourceChunks.push(data.numstat, data.nameStatus, data.patch);
       mergeNumstat(summaries, data.numstat);
       mergeNameStatus(summaries, data.nameStatus);
       mergePatch(summaries, data.patch, maxHunksPerFile, includeHunks);
     } else {
       const unstaged = await collectDiff(repoPath, {});
       const staged = await collectDiff(repoPath, { staged: true });
+      sourceChunks.push(
+        unstaged.numstat,
+        unstaged.nameStatus,
+        unstaged.patch,
+        staged.numstat,
+        staged.nameStatus,
+        staged.patch
+      );
       mergeNumstat(summaries, unstaged.numstat);
       mergeNumstat(summaries, staged.numstat);
       mergeNameStatus(summaries, unstaged.nameStatus);
@@ -255,7 +268,7 @@ export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<strin
       mergePatch(summaries, staged.patch, maxHunksPerFile, includeHunks);
     }
   } catch (err) {
-    return `Error: git_focus failed: ${String(err)}`;
+    return asToolResult(`Error: git_focus failed: ${String(err)}`);
   }
 
   const files = [...summaries.values()].sort((a, b) => {
@@ -269,15 +282,23 @@ export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<strin
   const totalAdded = files.reduce((sum, file) => sum + file.added, 0);
   const totalDeleted = files.reduce((sum, file) => sum + file.deleted, 0);
 
+  const sourceText = sourceChunks.filter(Boolean).join('\n\n');
+
   if (responseMode === 'minimal') {
-    return [
-      'ok:git_focus',
-      `scope=${baseRef ? 'base' : scope}`,
-      `files=${files.length}`,
-      `shown=${shown.length}`,
-      `added=${totalAdded}`,
-      `deleted=${totalDeleted}`,
-    ].join(' ');
+    return asToolResult(
+      [
+        'ok:git_focus',
+        `scope=${baseRef ? 'base' : scope}`,
+        `files=${files.length}`,
+        `shown=${shown.length}`,
+        `added=${totalAdded}`,
+        `deleted=${totalDeleted}`,
+      ].join(' '),
+      {
+        sourceText,
+        comparisonBasis: 'raw_diff',
+      }
+    );
   }
 
   const out: string[] = [];
@@ -295,7 +316,7 @@ export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<strin
   }
 
   const scopeLabel = baseRef ? `base:${baseRef}...HEAD` : scope;
-  return [
+  const text = [
     '=== Git Focus ===',
     `repo: ${repoPath}`,
     `scope: ${scopeLabel}`,
@@ -305,4 +326,10 @@ export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<strin
     `total_deleted: ${totalDeleted}`,
     files.length === 0 ? '(no changes)' : out.join('\n'),
   ].join('\n');
+
+  return asToolResult(text, {
+    sourceText,
+    candidateText: text,
+    comparisonBasis: 'raw_diff',
+  });
 }

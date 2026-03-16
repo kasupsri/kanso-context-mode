@@ -1,5 +1,6 @@
 import { spawnSync } from 'child_process';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { normalizeIncomingPath } from '../utils/path-input.js';
 
@@ -24,19 +25,21 @@ function astGrepBinary(): string | null {
   return null;
 }
 
-export function rewritePreviewTool(input: RewritePreviewToolInput): string {
+export function rewritePreviewTool(input: RewritePreviewToolInput): ToolExecutionResult {
   if (!input.pattern?.trim()) {
-    return 'Error: rewrite_preview requires "pattern"';
+    return asToolResult('Error: rewrite_preview requires "pattern"');
   }
   if (!input.rewrite?.trim()) {
-    return 'Error: rewrite_preview requires "rewrite"';
+    return asToolResult('Error: rewrite_preview requires "rewrite"');
   }
 
   const parsedMaxMatches = parsePositiveInteger(input.max_matches, 'rewrite_preview.max_matches');
-  if (typeof parsedMaxMatches === 'string') return parsedMaxMatches;
+  if (typeof parsedMaxMatches === 'string') return asToolResult(parsedMaxMatches);
   const binary = astGrepBinary();
   if (!binary) {
-    return 'Error: ast-grep CLI is not available. Install "ast-grep" or "sg" to use rewrite_preview.';
+    return asToolResult(
+      'Error: ast-grep CLI is not available. Install "ast-grep" or "sg" to use rewrite_preview.'
+    );
   }
 
   const rootPath = normalizeIncomingPath(input.path ?? process.cwd());
@@ -53,7 +56,9 @@ export function rewritePreviewTool(input: RewritePreviewToolInput): string {
   });
 
   if (result.status !== 0 && result.status !== 1) {
-    return `Error: ast-grep failed: ${result.stderr || result.stdout || `exit ${result.status}`}`;
+    return asToolResult(
+      `Error: ast-grep failed: ${result.stderr || result.stdout || `exit ${result.status}`}`
+    );
   }
 
   const outputLines = (result.stdout || '')
@@ -63,19 +68,31 @@ export function rewritePreviewTool(input: RewritePreviewToolInput): string {
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
 
   if (responseMode === 'minimal') {
-    return [
-      'ok:rewrite_preview',
-      `path=${rootPath}`,
-      `lines=${outputLines.length}`,
-      ...outputLines.slice(0, 10),
-    ].join('\n');
+    return asToolResult(
+      [
+        'ok:rewrite_preview',
+        `path=${rootPath}`,
+        `lines=${outputLines.length}`,
+        ...outputLines.slice(0, 10),
+      ].join('\n'),
+      {
+        sourceText: result.stdout,
+        comparisonBasis: 'workspace_source',
+      }
+    );
   }
 
-  return [
+  const text = [
     '=== Rewrite Preview ===',
     `path: ${rootPath}`,
     `pattern: ${input.pattern}`,
     `rewrite: ${input.rewrite}`,
     outputLines.length > 0 ? outputLines.join('\n') : '(no matches)',
   ].join('\n');
+
+  return asToolResult(text, {
+    sourceText: result.stdout,
+    candidateText: text,
+    comparisonBasis: 'workspace_source',
+  });
 }

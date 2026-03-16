@@ -2,6 +2,7 @@ import { DEFAULT_CONFIG } from '../config/defaults.js';
 import { type ResponseMode } from '../config/defaults.js';
 import { contextResourceLink, kbResourceLink } from '../resources/registry.js';
 import { getAppState } from '../state/index.js';
+import { estimateTokens } from '../utils/token-estimator.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 
 export interface SearchToolInput {
@@ -73,6 +74,12 @@ export async function searchTool(input: SearchToolInput): Promise<ToolExecutionR
     sourceText,
     candidateText: candidateSource || text,
     comparisonBasis: 'indexed_source',
+    tracking: {
+      sourceBytes: corpusStats.sourceBytes > 0 ? corpusStats.sourceBytes : undefined,
+      sourceTokens: corpusStats.sourceTokens > 0 ? corpusStats.sourceTokens : undefined,
+      candidateBytes: Buffer.byteLength(candidateSource || text, 'utf8'),
+      candidateTokens: estimateTokens(candidateSource || text).tokens,
+    },
     resourceLinks: [
       kbResourceLink(kbName),
       ...(contextId ? [contextResourceLink(contextId, `kb_search:${kbName}:${input.query}`)] : []),

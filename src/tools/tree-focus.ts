@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { treeFocus } from './workspace-helpers.js';
 import { normalizeIncomingPath } from '../utils/path-input.js';
@@ -20,11 +21,11 @@ function formatSize(sizeBytes?: number): string {
   return `${sizeBytes}B`;
 }
 
-export async function treeFocusTool(input: TreeFocusToolInput = {}): Promise<string> {
+export async function treeFocusTool(input: TreeFocusToolInput = {}): Promise<ToolExecutionResult> {
   const parsedDepth = parsePositiveInteger(input.depth, 'tree_focus.depth');
-  if (typeof parsedDepth === 'string') return parsedDepth;
+  if (typeof parsedDepth === 'string') return asToolResult(parsedDepth);
   const parsedMaxEntries = parsePositiveInteger(input.max_entries, 'tree_focus.max_entries');
-  if (typeof parsedMaxEntries === 'string') return parsedMaxEntries;
+  if (typeof parsedMaxEntries === 'string') return asToolResult(parsedMaxEntries);
 
   const rootPath = normalizeIncomingPath(input.path ?? process.cwd());
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
@@ -35,17 +36,35 @@ export async function treeFocusTool(input: TreeFocusToolInput = {}): Promise<str
     includeHidden: input.include_hidden ?? false,
     glob: input.glob,
   });
+  const sourceText = entries
+    .map(entry =>
+      [
+        `type=${entry.type}`,
+        `path=${entry.relativePath}`,
+        `depth=${entry.depth}`,
+        typeof entry.sizeBytes === 'number' ? `size=${entry.sizeBytes}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    )
+    .join('\n');
 
   if (responseMode === 'minimal') {
-    return [
-      'ok:tree_focus',
-      `path=${rootPath}`,
-      `entries=${entries.length}`,
-      ...entries.slice(0, 12).map(entry => `${entry.type}:${entry.relativePath}`),
-    ].join('\n');
+    return asToolResult(
+      [
+        'ok:tree_focus',
+        `path=${rootPath}`,
+        `entries=${entries.length}`,
+        ...entries.slice(0, 12).map(entry => `${entry.type}:${entry.relativePath}`),
+      ].join('\n'),
+      {
+        sourceText,
+        comparisonBasis: 'workspace_source',
+      }
+    );
   }
 
-  return [
+  const text = [
     '=== Tree Focus ===',
     `path: ${rootPath}`,
     `entries: ${entries.length}`,
@@ -55,4 +74,10 @@ export async function treeFocusTool(input: TreeFocusToolInput = {}): Promise<str
         : `[file] ${'  '.repeat(entry.depth)}${entry.relativePath} (${formatSize(entry.sizeBytes)})`
     ),
   ].join('\n');
+
+  return asToolResult(text, {
+    sourceText,
+    candidateText: text,
+    comparisonBasis: 'workspace_source',
+  });
 }

@@ -30,8 +30,8 @@ export function sessionResumeTool(input: SessionResumeToolInput = {}): ToolExecu
       : `ok:session_resume host=${snapshot.host} events=${snapshot.eventCount} session=${snapshot.externalSessionId ?? 'latest'}`;
 
   return asToolResult(text, {
-    sourceText: snapshot.text,
-    candidateText: snapshot.text,
+    sourceText: snapshot.fullText,
+    candidateText: snapshot.fullText,
     comparisonBasis: 'session_snapshot_source',
     resourceLinks: [sessionResourceLink(snapshot.host, snapshot.externalSessionId ?? 'latest')],
   });

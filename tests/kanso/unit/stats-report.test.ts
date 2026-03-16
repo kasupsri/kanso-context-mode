@@ -25,7 +25,18 @@ describe('stats reporting', () => {
     });
 
     const report = statsReportTool({ response_mode: 'full' });
+    const snapshot = state.getStatsSnapshot();
+    expect(snapshot.schemaVersion).toBe(2);
+    expect(snapshot.session.savedPctOfSource).toBeGreaterThan(0);
+    expect(snapshot.session.outputPctOfSource).toBeGreaterThanOrEqual(0);
+    expect(snapshot.session.topTool?.name).toBe('execute');
+    expect(snapshot.session.topTool?.shareOfSavings).toBe(100);
+    expect(snapshot.session.sourceToOutputRatio).not.toBeNull();
+    expect(snapshot.session.avgSavedTokensPerEvent).toBeGreaterThan(0);
+    expect(snapshot.session.retrievalPctOfSaved + snapshot.session.compressionPctOfSaved).toBe(100);
+    expect(snapshot.session.changedPct).toBe(100);
     expect(report).toContain('SESSION');
+    expect(report).toContain('SUMMARY');
     expect(report).toContain('ALL TIME (PROJECT)');
     expect(report).toContain('estimated');
   });
@@ -53,7 +64,7 @@ describe('stats reporting', () => {
 
     const after = statsReportTool({ response_mode: 'full' });
     expect(after).toContain('ALL TIME (PROJECT)');
-    expect(after).toContain('Total saved:');
+    expect(after).toContain('Saved % of source');
   });
 
   it('keeps total savings positive when a source proxy is smaller than the candidate text', () => {
@@ -80,5 +91,13 @@ describe('stats reporting', () => {
       (searchTotals?.retrievalSavedTokens ?? 0) + (searchTotals?.compressionSavedTokens ?? 0)
     );
     expect(searchTotals?.totalSavedTokens).toBeGreaterThan(0);
+  });
+
+  it('shows a friendly zero-data report before tracked tool usage', () => {
+    stateDir = useTempStateDir();
+
+    const report = statsReportTool({ response_mode: 'full' });
+    expect(report).toContain('No tracked Kanso activity yet.');
+    expect(report).not.toContain('BY TOOL');
   });
 });

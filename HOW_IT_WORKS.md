@@ -11,12 +11,40 @@
 7. A durable compression event is written to SQLite.
 8. Daily rollups are updated for project and global stats.
 
+## Stats accounting
+
+Every tracked Kanso tool call is measured in three stages:
+
+- `source`: the broader raw baseline Kanso avoided sending
+- `candidate`: the tool's focused text before final response optimization
+- `output`: the final host-visible text after optimization
+
+Kanso then derives:
+
+- `retrieval_saved = max(0, source - candidate)`
+- `compression_saved = max(0, candidate - output)`
+- `total_saved = retrieval_saved + compression_saved`
+- `savedPctOfSource = total_saved / source`
+- `outputPctOfSource = output / source`
+- `sourceToOutputRatio = source / output`
+
+Percentages are token-based, not byte-based, because the user-facing question is about context window pressure.
+
+Some tools can legitimately report low or zero savings:
+
+- the tool may already return a narrow response
+- the final rendered output may still be useful enough to keep largely intact
+- the savings may come mostly from retrieval instead of final-response compression
+
+When the stats accounting model changes, Kanso clears old `compression_events` and `daily_rollups` once and starts a clean stats window under the new schema version so reports stay comparable.
+
 ## Disk-first state
 
 Kanso stores state in a per-user data directory using SQLite.
 
 Main tables:
 
+- `app_metadata`
 - `projects`
 - `sessions`
 - `content_handles`

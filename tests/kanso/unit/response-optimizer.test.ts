@@ -50,7 +50,7 @@ describe('optimizeResponse', () => {
 
   it('preserves valid minimal outputs instead of recompressing them', () => {
     const text = [
-      'search n=3 q=\"Large JSON 99% overflow-96 token window\" kb=stress-kb',
+      'search n=3 q="Large JSON 99% overflow-96 token window" kb=stress-kb',
       '1. s=0.10 src=bench.md h=Kanso Compression Benchmarks',
       'Large JSON saved 99% with the ultra strategy.',
       '2. s=0.20 src=bench.md h=Development Workflow Benchmarks',

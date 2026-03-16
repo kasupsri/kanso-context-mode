@@ -27,6 +27,15 @@ export interface SessionEventRecord {
   data: string;
 }
 
+export interface ToolTrackingMetrics {
+  sourceBytes?: number;
+  candidateBytes?: number;
+  outputBytes?: number;
+  sourceTokens?: number;
+  candidateTokens?: number;
+  outputTokens?: number;
+}
+
 export interface ToolExecutionResult {
   text: string;
   sourceText?: string;
@@ -36,6 +45,7 @@ export interface ToolExecutionResult {
   host?: HostId;
   externalSessionId?: string;
   resourceLinks?: ToolResourceLink[];
+  tracking?: ToolTrackingMetrics;
 }
 
 export function asToolResult(

@@ -1,5 +1,6 @@
 import { compress, type CompressionStrategy } from '../compression/strategies.js';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 
 export interface CompressToolInput {
   content: string;
@@ -9,7 +10,7 @@ export interface CompressToolInput {
   response_mode?: ResponseMode;
 }
 
-export function compressTool(input: CompressToolInput): string {
+export function compressTool(input: CompressToolInput): ToolExecutionResult {
   const mode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const strategy = input.strategy ?? (mode === 'minimal' ? 'ultra' : 'summarize');
   const maxChars =
@@ -19,9 +20,15 @@ export function compressTool(input: CompressToolInput): string {
       ? Math.floor(input.max_output_tokens) * 3
       : undefined;
 
-  return compress(input.content, {
+  const result = compress(input.content, {
     intent: input.intent,
     strategy,
     maxOutputChars: maxChars,
-  }).output;
+  });
+
+  return asToolResult(result.output, {
+    sourceText: input.content,
+    candidateText: result.output,
+    comparisonBasis: 'raw_output',
+  });
 }
