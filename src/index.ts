@@ -5,6 +5,7 @@ import { loadConfigFromEnv, parseConfig } from './config/schema.js';
 import { DEFAULT_CONFIG } from './config/defaults.js';
 import { runSetup } from './adapters/generic.js';
 import { doctorTool } from './tools/doctor.js';
+import { statsReportTool } from './tools/stats-report.js';
 import { handleHook } from './hooks/handler.js';
 import { startLifecycleGuard } from './runtime/lifecycle.js';
 
@@ -34,6 +35,8 @@ if (args[0] === 'setup') {
   });
 } else if (args[0] === 'doctor') {
   console.log(doctorTool({ response_mode: 'full' }));
+} else if (args[0] === 'stats') {
+  console.log(statsReportTool({ response_mode: 'full' }));
 } else if (args[0] === 'hook') {
   const host = args[1] ?? '';
   const event = args[2] ?? '';

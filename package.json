@@ -47,6 +47,7 @@
     "benchmark": "tsx scripts/benchmark.ts",
     "setup": "node dist/index.js setup",
     "doctor": "node dist/index.js doctor",
+    "stats": "node dist/index.js stats",
     "setup:ps1": "powershell -ExecutionPolicy Bypass -File ./setup.ps1",
     "setup:sh": "bash ./setup.sh",
     "prepublishOnly": "npm run validate"

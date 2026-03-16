@@ -53,6 +53,7 @@ cd kanso-context-mode
 npm install
 npm run build
 npm run doctor
+npm run stats
 ```
 
 ### With npx
@@ -131,6 +132,12 @@ The returned `context_id` is a snapshot handle stored on disk. It is not a live 
 - all time globally
 
 Kanso labels token counts as estimated because hosts do not consistently expose exact tokenizer or prompt-cache usage for every MCP call.
+
+From a local checkout, you can print the same report in your terminal with:
+
+```bash
+npm run stats
+```
 
 ## Memory Strategy
 
