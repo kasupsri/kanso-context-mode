@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { DEFAULT_CONFIG } from '../config/defaults.js';
 import { evaluateFilePath } from '../security/policy.js';
 import { selectByQuery, type QuerySelection } from './file-selectors.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_IGNORED_DIRS = new Set([
@@ -57,7 +58,7 @@ export interface TreeFocusEntry {
 let rgAvailable: boolean | undefined;
 
 function normalizeRoot(rootPath: string): string {
-  return resolve(rootPath || process.cwd());
+  return resolve(normalizeIncomingPath(rootPath || process.cwd()));
 }
 
 function normalizeQuery(query: string): string {

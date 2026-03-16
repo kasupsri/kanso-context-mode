@@ -132,4 +132,38 @@ describe('MCP protocol', () => {
 
     expect(extractText(second)).toContain('tokenBudget');
   });
+
+  it('preserves compact tool text instead of replacing it with candidate text', async () => {
+    const index = await client.callTool({
+      name: 'index',
+      arguments: {
+        kb_name: 'protocol-test',
+        source: 'inline',
+        content:
+          '# Kanso Compression Benchmarks\n\nLarge JSON saved 99%.\n\nbalanced overflow-96 token window benchmark.\n',
+        response_mode: 'minimal',
+      },
+    });
+    expect(extractText(index)).toContain('ok:index');
+
+    const search = await client.callTool({
+      name: 'search',
+      arguments: {
+        kb_name: 'protocol-test',
+        query: 'Large JSON 99% overflow-96 token window',
+        response_mode: 'minimal',
+      },
+    });
+    expect(extractText(search)).toMatch(/^search /);
+
+    const sessionResume = await client.callTool({
+      name: 'session_resume',
+      arguments: {
+        host: 'codex',
+        response_mode: 'minimal',
+      },
+    });
+    expect(extractText(sessionResume)).toMatch(/^ok:session_resume /);
+    expect(extractText(sessionResume)).toContain('host=codex');
+  });
 });

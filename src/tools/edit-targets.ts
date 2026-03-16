@@ -9,6 +9,7 @@ import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { extractSymbolsWithTreeSitter } from './symbol-parser.js';
 import { scoreTaskTokens, searchWorkspace } from './workspace-helpers.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -74,7 +75,7 @@ export async function editTargetsTool(input: EditTargetsToolInput): Promise<Tool
   const parsedMaxFiles = parsePositiveInteger(input.max_files, 'edit_targets.max_files');
   if (typeof parsedMaxFiles === 'string') return asToolResult(parsedMaxFiles);
 
-  const rootPath = resolve((input.paths && input.paths[0]) || process.cwd());
+  const rootPath = resolve(normalizeIncomingPath((input.paths && input.paths[0]) || process.cwd()));
   const tokens = scoreTaskTokens(input.task).slice(0, 6);
   const ranked = new Map<string, RankedTarget>();
   const ensureTarget = (path: string): RankedTarget => {

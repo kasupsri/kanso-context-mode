@@ -1,5 +1,4 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
-import { detectHost } from '../runtime/host.js';
 import { getAppState } from '../state/index.js';
 import { getAvailableRuntimes, getRuntimeForLanguage } from '../sandbox/runtimes.js';
 import { evaluateCommand, evaluateFilePath } from '../security/policy.js';
@@ -17,7 +16,7 @@ export function doctorTool(input: DoctorToolInput = {}): string {
   const state = getAppState();
   const profile = resolveTokenProfile();
   const cache = state.getCacheStats();
-  const host = detectHost();
+  const host = state.getHostInfo();
   const riskyCommand =
     process.platform === 'win32'
       ? 'Remove-Item -Recurse -Force C:\\temp\\danger'

@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { getAppState } from '../state/index.js';
 import { evaluateFilePath } from '../security/policy.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface IndexContentToolInput {
   content?: string;
@@ -16,7 +17,7 @@ export interface IndexContentToolInput {
 
 export function resolveIndexSourceLabel(input: IndexContentToolInput): string {
   if (input.source?.trim()) return input.source.trim();
-  if (input.path?.trim()) return input.path.trim();
+  if (input.path?.trim()) return normalizeIncomingPath(input.path);
   return 'inline';
 }
 
@@ -30,14 +31,16 @@ async function loadIndexContent(input: IndexContentToolInput): Promise<string> {
     throw new Error('index requires "content" or "path".');
   }
 
-  const denied = evaluateFilePath(input.path);
+  const resolvedPath = normalizeIncomingPath(input.path);
+
+  const denied = evaluateFilePath(resolvedPath);
   if (denied.denied) {
     throw new Error(`Blocked by security policy: file path matches "${denied.matchedPattern}"`);
   }
 
-  const fileStats = await stat(input.path);
+  const fileStats = await stat(resolvedPath);
   if (!fileStats.isFile()) {
-    throw new Error(`"${input.path}" is not a regular file.`);
+    throw new Error(`"${resolvedPath}" is not a regular file.`);
   }
   if (fileStats.size > DEFAULT_CONFIG.sandbox.maxFileBytes) {
     throw new Error(
@@ -45,7 +48,7 @@ async function loadIndexContent(input: IndexContentToolInput): Promise<string> {
     );
   }
 
-  return readFile(input.path, 'utf8');
+  return readFile(resolvedPath, 'utf8');
 }
 
 export async function indexContentTool(input: IndexContentToolInput): Promise<ToolExecutionResult> {

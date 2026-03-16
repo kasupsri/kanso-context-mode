@@ -275,12 +275,43 @@ function toTotals(row: AggregateRow | undefined): Totals {
 }
 
 function sanitizeSearchQuery(query: string): string {
-  return query
-    .split(/\s+/)
+  const tokens = query
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9._-]*/g)
+    ?.flatMap(token => token.split(/[^a-z0-9]+/))
     .map(token => token.trim())
-    .filter(token => token.length > 1)
-    .map(token => `"${token.replace(/"/g, '')}"`)
-    .join(' ');
+    .filter(token => token.length > 1);
+
+  return [...new Set(tokens ?? [])].map(token => `${token}*`).join(' OR ');
+}
+
+function scoreSearchFallback(
+  query: string,
+  heading: string,
+  content: string
+): { matchedTokens: number; score: number } {
+  const tokens = query
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9._-]*/g)
+    ?.flatMap(token => token.split(/[^a-z0-9]+/))
+    .map(token => token.trim())
+    .filter(token => token.length > 1);
+  if (!tokens || tokens.length === 0) {
+    return { matchedTokens: 0, score: 0 };
+  }
+
+  const haystack = `${heading}\n${content}`.toLowerCase();
+  const headingText = heading.toLowerCase();
+  let matchedTokens = 0;
+  let score = 0;
+
+  for (const token of [...new Set(tokens)]) {
+    if (!haystack.includes(token)) continue;
+    matchedTokens += 1;
+    score += headingText.includes(token) ? 4 : 1;
+  }
+
+  return { matchedTokens, score };
 }
 
 function buildSnippet(content: string, query: string, size = 220): string {
@@ -553,18 +584,26 @@ export class AppState {
     const sourceText = input.sourceText ?? candidateText;
     const outputText = input.outputText;
 
-    const sourceBytes = Buffer.byteLength(sourceText, 'utf8');
     const candidateBytes = Buffer.byteLength(candidateText, 'utf8');
     const outputBytes = Buffer.byteLength(outputText, 'utf8');
-    const sourceTokens = input.sourceTokens ?? estimateTokens(sourceText).tokens;
     const candidateTokens = input.candidateTokens ?? estimateTokens(candidateText).tokens;
     const outputTokens = input.outputTokens ?? estimateTokens(outputText).tokens;
+    const sourceBytes = Math.max(
+      Buffer.byteLength(sourceText, 'utf8'),
+      candidateBytes,
+      outputBytes
+    );
+    const sourceTokens = Math.max(
+      input.sourceTokens ?? estimateTokens(sourceText).tokens,
+      candidateTokens,
+      outputTokens
+    );
     const retrievalSavedBytes = Math.max(0, sourceBytes - candidateBytes);
     const compressionSavedBytes = Math.max(0, candidateBytes - outputBytes);
-    const totalSavedBytes = Math.max(0, sourceBytes - outputBytes);
+    const totalSavedBytes = retrievalSavedBytes + compressionSavedBytes;
     const retrievalSavedTokens = Math.max(0, sourceTokens - candidateTokens);
     const compressionSavedTokens = Math.max(0, candidateTokens - outputTokens);
-    const totalSavedTokens = Math.max(0, sourceTokens - outputTokens);
+    const totalSavedTokens = retrievalSavedTokens + compressionSavedTokens;
     const createdAt = nowIso();
     const day = todayKey();
     const host = input.host ?? this.hostInfo.id;
@@ -789,6 +828,41 @@ export class AppState {
       content: string;
       score: number;
     }>;
+
+    if (rows.length === 0) {
+      const fallbackRows = this.db
+        .prepare(
+          `SELECT
+            source_label AS source,
+            heading,
+            content
+          FROM kb_chunks
+          WHERE project_id = ? AND kb_name = ?`
+        )
+        .all(this.projectId, kbName) as Array<{
+        source: string;
+        heading: string;
+        content: string;
+      }>;
+
+      return fallbackRows
+        .map(row => {
+          const fallback = scoreSearchFallback(query, row.heading, row.content);
+          return {
+            source: row.source,
+            heading: row.heading,
+            content: row.content,
+            snippet: buildSnippet(row.content, query),
+            score: fallback.score,
+            kbName,
+            matchedTokens: fallback.matchedTokens,
+          };
+        })
+        .filter(row => row.matchedTokens > 0)
+        .sort((a, b) => b.score - a.score || a.source.localeCompare(b.source))
+        .slice(0, topK)
+        .map(({ matchedTokens: _matchedTokens, ...row }) => row);
+    }
 
     return rows.map(row => ({
       source: row.source,

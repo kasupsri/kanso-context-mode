@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { evaluateFilePath } from '../security/policy.js';
 import { parsePositiveInteger } from './file-selectors.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -189,7 +190,7 @@ function compactStatus(statuses: Set<string>): string {
 }
 
 export async function gitFocusTool(input: GitFocusToolInput = {}): Promise<string> {
-  const repoPath = input.repo_path ?? process.cwd();
+  const repoPath = normalizeIncomingPath(input.repo_path ?? process.cwd());
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const parsedMaxFiles = parsePositiveInteger(input.max_files, 'git_focus.max_files');
   if (typeof parsedMaxFiles === 'string') return parsedMaxFiles;

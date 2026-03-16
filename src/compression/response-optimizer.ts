@@ -240,7 +240,9 @@ export function optimizeResponse(
 
   const smallFastPath =
     rawCandidate.valid &&
-    (responseMode === 'full' || rawCandidate.outputChars <= SMALL_FAST_PATH_CHARS);
+    (responseMode === 'full' ||
+      responseMode === 'minimal' ||
+      rawCandidate.outputChars <= SMALL_FAST_PATH_CHARS);
   if (smallFastPath) {
     return {
       output: rawCandidate.output,

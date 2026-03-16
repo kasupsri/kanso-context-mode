@@ -141,6 +141,8 @@ function resolveMaxOutputChars(maxOutputChars?: number): number {
 
 function looksLikeCsv(lines: string[]): boolean {
   if (lines.length < 2) return false;
+  const numberedLines = lines.filter(line => /^\s*\d+\|\s/.test(line)).length;
+  if (numberedLines >= Math.min(2, lines.length)) return false;
   const delimiters = [',', '\t', ';', '|'];
   for (const delim of delimiters) {
     const counts = lines.map(l => l.split(delim).length);

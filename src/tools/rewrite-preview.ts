@@ -1,6 +1,7 @@
 import { spawnSync } from 'child_process';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { parsePositiveInteger } from './file-selectors.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface RewritePreviewToolInput {
   pattern: string;
@@ -38,7 +39,7 @@ export function rewritePreviewTool(input: RewritePreviewToolInput): string {
     return 'Error: ast-grep CLI is not available. Install "ast-grep" or "sg" to use rewrite_preview.';
   }
 
-  const rootPath = input.path ?? process.cwd();
+  const rootPath = normalizeIncomingPath(input.path ?? process.cwd());
   const args = ['scan', '--pattern', input.pattern.trim(), '--rewrite', input.rewrite.trim()];
   if (input.language?.trim()) {
     args.push('--lang', input.language.trim());

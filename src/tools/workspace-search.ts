@@ -4,6 +4,7 @@ import { contextResourceLink } from '../resources/registry.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { searchWorkspace } from './workspace-helpers.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface WorkspaceSearchToolInput {
   query: string;
@@ -34,7 +35,7 @@ export async function workspaceSearchTool(
   );
   if (typeof parsedContextLines === 'string') return asToolResult(parsedContextLines);
 
-  const rootPath = input.root_path ?? process.cwd();
+  const rootPath = normalizeIncomingPath(input.root_path ?? process.cwd());
   const results = await searchWorkspace({
     rootPath,
     query: input.query,

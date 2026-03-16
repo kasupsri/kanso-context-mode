@@ -10,6 +10,7 @@ import {
 import { contextResourceLink, runResourceLink } from '../resources/registry.js';
 import { getAppState } from '../state/index.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface ExecuteFileToolInput {
   file_path: string;
@@ -25,7 +26,8 @@ export interface ExecuteFileToolInput {
 export async function executeFileTool(
   input: ExecuteFileToolInput
 ): Promise<ToolExecutionResult | string> {
-  const fileCheck = evaluateFilePath(input.file_path);
+  const resolvedPath = normalizeIncomingPath(input.file_path);
+  const fileCheck = evaluateFilePath(resolvedPath);
   if (fileCheck.denied) {
     return `Blocked by security policy: file path matches "${fileCheck.matchedPattern}"`;
   }
@@ -43,7 +45,7 @@ export async function executeFileTool(
       ? Math.floor(input.timeout)
       : DEFAULT_CONFIG.sandbox.timeoutMs;
 
-  const result = await executeFile(input.file_path, input.code, {
+  const result = await executeFile(resolvedPath, input.code, {
     timeoutMs,
     maxFileBytes: DEFAULT_CONFIG.sandbox.maxFileBytes,
   });
@@ -60,10 +62,10 @@ export async function executeFileTool(
   }
 
   const state = getAppState();
-  const commandLabel = `execute_file ${input.file_path}`;
+  const commandLabel = `execute_file ${resolvedPath}`;
   const handle =
     rawOutput.trim() || input.return_context_id
-      ? state.saveHandle(rawOutput || 'ok', `execute_file:${input.file_path}`)
+      ? state.saveHandle(rawOutput || 'ok', `execute_file:${resolvedPath}`)
       : undefined;
   const recordedRun =
     input.record_session === false
@@ -89,7 +91,7 @@ export async function executeFileTool(
       resourceLinks: [
         ...(recordedRun ? [runResourceLink(recordedRun.id, commandLabel)] : []),
         ...(handle && (input.return_context_id ?? true)
-          ? [contextResourceLink(handle.id, `execute_file:${input.file_path}`)]
+          ? [contextResourceLink(handle.id, `execute_file:${resolvedPath}`)]
           : []),
       ],
       sessionEvents:
@@ -106,7 +108,7 @@ export async function executeFileTool(
                 type: 'file_read',
                 category: 'file',
                 priority: 1,
-                data: input.file_path,
+                data: resolvedPath,
               },
               ...(result.exitCode !== 0 || result.timedOut
                 ? [
@@ -135,7 +137,7 @@ export async function executeFileTool(
     resourceLinks: [
       ...(recordedRun ? [runResourceLink(recordedRun.id, commandLabel)] : []),
       ...(handle && (input.return_context_id ?? true)
-        ? [contextResourceLink(handle.id, `execute_file:${input.file_path}`)]
+        ? [contextResourceLink(handle.id, `execute_file:${resolvedPath}`)]
         : []),
     ],
     sessionEvents:
@@ -152,7 +154,7 @@ export async function executeFileTool(
               type: 'file_read',
               category: 'file',
               priority: 1,
-              data: input.file_path,
+              data: resolvedPath,
             },
             ...(result.exitCode !== 0 || result.timedOut
               ? [

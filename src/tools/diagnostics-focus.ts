@@ -22,8 +22,14 @@ interface DiagnosticIssue {
 }
 
 const TSC_PATTERN = /^(.+?)\((\d+),(\d+)\):\s*(error|warning)\s*(TS\d+)?\s*:?\s*(.+?)\s*$/i;
+const TSC_NOLOC_PATTERN = /^\s*(error|warning)\s*(TS\d+)?\s*:?\s*(.+?)\s*$/i;
 const ESLINT_PATTERN = /^(.+?):(\d+):(\d+):\s*(error|warning)\s+(.+?)\s*$/i;
-const FILE_PREFIX_PATTERN = /^((?:[A-Za-z]:)?[^:\s]+\.[A-Za-z0-9]+):\s*(.+)$/;
+const FILE_PREFIX_PATTERN = /^((?:[A-Za-z]:)?[^:\s]+\.[A-Za-z0-9]+)(?::(\d+):(\d+))?:\s*(.+)$/;
+const TEST_STATUS_PATTERN = /^\s*(FAIL|PASS)\s+(.+?)\s*$/;
+const TEST_CASE_PATTERN = /^\s*[×x]\s+(.+?)\s*$/;
+const TEST_BULLET_PATTERN = /^\s*●\s+(.+?)\s*$/;
+const STACK_FRAME_PATTERN = /^\s*at\s+.+?\(?(.+?):(\d+):(\d+)\)?\s*$/;
+const SUPPORTED_FORMATS = new Set(['auto', 'tsc', 'eslint', 'vitest', 'jest', 'generic']);
 
 function severityRank(severity: DiagnosticIssue['severity']): number {
   if (severity === 'error') return 0;
@@ -35,11 +41,19 @@ function detectFormat(
   input: DiagnosticsFocusToolInput['format'],
   lines: string[]
 ): DiagnosticsFocusToolInput['format'] {
-  if (input && input !== 'auto') return input;
+  const requested =
+    input && SUPPORTED_FORMATS.has(input) ? input : ('auto' as DiagnosticsFocusToolInput['format']);
+  if (requested && requested !== 'auto') return requested;
   for (const line of lines) {
-    if (TSC_PATTERN.test(line)) return 'tsc';
+    if (TSC_PATTERN.test(line) || TSC_NOLOC_PATTERN.test(line)) return 'tsc';
     if (ESLINT_PATTERN.test(line)) return 'eslint';
-    if (/^\s*(FAIL|PASS)\s+/.test(line)) return 'vitest';
+    if (
+      TEST_STATUS_PATTERN.test(line) ||
+      TEST_CASE_PATTERN.test(line) ||
+      TEST_BULLET_PATTERN.test(line)
+    ) {
+      return 'jest';
+    }
   }
   return 'generic';
 }
@@ -73,6 +87,23 @@ function pushIssue(
   map.set(key, { ...issueBase, count: 1, sample: sample.trim() });
 }
 
+function parseLineWithFallbacks(
+  detectedFormat: DiagnosticsFocusToolInput['format'],
+  line: string
+): Omit<DiagnosticIssue, 'count' | 'sample'> | undefined {
+  const fallbacks: DiagnosticsFocusToolInput['format'][] =
+    detectedFormat === 'generic'
+      ? ['generic', 'tsc', 'eslint', 'jest']
+      : [detectedFormat, 'generic', 'jest', 'tsc', 'eslint'];
+
+  for (const format of fallbacks) {
+    const issue = parseLine(format, line);
+    if (issue) return issue;
+  }
+
+  return undefined;
+}
+
 function parseLine(
   format: DiagnosticsFocusToolInput['format'],
   line: string
@@ -92,6 +123,18 @@ function parseLine(
     };
   }
 
+  const tscNoLoc = TSC_NOLOC_PATTERN.exec(line);
+  if (format === 'tsc' && tscNoLoc) {
+    return {
+      severity: (tscNoLoc[1]?.toLowerCase() === 'warning' ? 'warning' : 'error') as
+        | 'error'
+        | 'warning'
+        | 'info',
+      code: tscNoLoc[2]?.trim() || undefined,
+      message: normalizeMessage(tscNoLoc[3] ?? ''),
+    };
+  }
+
   const eslint = ESLINT_PATTERN.exec(line);
   if (format === 'eslint' && eslint) {
     return {
@@ -107,18 +150,36 @@ function parseLine(
   }
 
   if (format === 'vitest' || format === 'jest') {
-    if (/^\s*(FAIL|PASS)\s+/.test(line)) {
+    const testStatus = TEST_STATUS_PATTERN.exec(line);
+    if (testStatus) {
       return {
-        severity: 'info',
+        severity: testStatus[1] === 'FAIL' ? 'error' : 'info',
+        file: testStatus[2]?.trim() || undefined,
         message: normalizeMessage(line),
+      };
+    }
+    const testCase = TEST_CASE_PATTERN.exec(line);
+    if (testCase) {
+      return {
+        severity: 'error',
+        message: normalizeMessage(testCase[1] ?? ''),
+      };
+    }
+    const testBullet = TEST_BULLET_PATTERN.exec(line);
+    if (testBullet) {
+      return {
+        severity: 'error',
+        message: normalizeMessage(testBullet[1] ?? ''),
       };
     }
     const prefixed = FILE_PREFIX_PATTERN.exec(line);
     if (prefixed) {
       return {
-        severity: /warning/i.test(prefixed[2] ?? '') ? 'warning' : 'error',
+        severity: /warning/i.test(prefixed[4] ?? '') ? 'warning' : 'error',
         file: prefixed[1]?.trim(),
-        message: normalizeMessage(prefixed[2] ?? ''),
+        line: Number.parseInt(prefixed[2] ?? '0', 10) || undefined,
+        column: Number.parseInt(prefixed[3] ?? '0', 10) || undefined,
+        message: normalizeMessage(prefixed[4] ?? ''),
       };
     }
     if (/error|exception|failed/i.test(line)) {
@@ -131,6 +192,26 @@ function parseLine(
 
   if (format === 'generic') {
     if (!line.trim()) return undefined;
+    const stackFrame = STACK_FRAME_PATTERN.exec(line);
+    if (stackFrame) {
+      return {
+        severity: 'error',
+        file: stackFrame[1]?.trim(),
+        line: Number.parseInt(stackFrame[2] ?? '0', 10) || undefined,
+        column: Number.parseInt(stackFrame[3] ?? '0', 10) || undefined,
+        message: 'stack frame',
+      };
+    }
+    const prefixed = FILE_PREFIX_PATTERN.exec(line);
+    if (prefixed) {
+      return {
+        severity: /warning/i.test(prefixed[4] ?? '') ? 'warning' : 'error',
+        file: prefixed[1]?.trim(),
+        line: Number.parseInt(prefixed[2] ?? '0', 10) || undefined,
+        column: Number.parseInt(prefixed[3] ?? '0', 10) || undefined,
+        message: normalizeMessage(prefixed[4] ?? ''),
+      };
+    }
     if (/error|exception|failed/i.test(line)) {
       return { severity: 'error', message: normalizeMessage(line) };
     }
@@ -154,7 +235,7 @@ export function diagnosticsFocusTool(input: DiagnosticsFocusToolInput): string {
   const issuesMap = new Map<string, DiagnosticIssue>();
 
   for (const line of lines) {
-    const issue = parseLine(detectedFormat, line);
+    const issue = parseLineWithFallbacks(detectedFormat, line);
     if (!issue) continue;
     pushIssue(issuesMap, issue, line);
   }

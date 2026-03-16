@@ -10,8 +10,44 @@ export interface HostInfo {
   reason: string;
 }
 
-export function detectHost(): HostInfo {
-  if (process.env['CLAUDE_PROJECT_DIR'] || process.env['CLAUDE_SESSION_ID']) {
+interface DetectHostOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}
+
+function detectWorkspaceHost(cwd: string): HostInfo | null {
+  if (existsSync(join(cwd, 'AGENTS.md')) || existsSync(join(cwd, '.codex'))) {
+    return {
+      id: 'codex',
+      confidence: 'medium',
+      reason: 'Codex workspace markers detected',
+    };
+  }
+
+  if (existsSync(join(cwd, '.cursor')) || existsSync(join(cwd, '.cursor', 'mcp.json'))) {
+    return {
+      id: 'cursor',
+      confidence: 'medium',
+      reason: 'Cursor workspace markers detected',
+    };
+  }
+
+  if (existsSync(join(cwd, 'CLAUDE.md')) || existsSync(join(cwd, '.claude'))) {
+    return {
+      id: 'claude',
+      confidence: 'medium',
+      reason: 'Claude workspace markers detected',
+    };
+  }
+
+  return null;
+}
+
+export function detectHost(options: DetectHostOptions = {}): HostInfo {
+  const env = options.env ?? process.env;
+
+  if (env['CLAUDE_PROJECT_DIR'] || env['CLAUDE_SESSION_ID']) {
     return {
       id: 'claude',
       confidence: 'high',
@@ -19,7 +55,7 @@ export function detectHost(): HostInfo {
     };
   }
 
-  if (process.env['CURSOR_TRACE_ID'] || process.env['CURSOR_CLI']) {
+  if (env['CURSOR_TRACE_ID'] || env['CURSOR_CLI']) {
     return {
       id: 'cursor',
       confidence: 'high',
@@ -27,7 +63,7 @@ export function detectHost(): HostInfo {
     };
   }
 
-  if (process.env['CODEX_CI'] || process.env['CODEX_THREAD_ID']) {
+  if (env['CODEX_CI'] || env['CODEX_THREAD_ID']) {
     return {
       id: 'codex',
       confidence: 'high',
@@ -35,7 +71,12 @@ export function detectHost(): HostInfo {
     };
   }
 
-  const home = homedir();
+  const workspaceHost = detectWorkspaceHost(resolve(options.cwd ?? process.cwd()));
+  if (workspaceHost) {
+    return workspaceHost;
+  }
+
+  const home = options.homeDir ?? homedir();
   if (existsSync(resolve(home, '.claude'))) {
     return {
       id: 'claude',

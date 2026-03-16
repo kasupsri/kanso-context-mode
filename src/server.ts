@@ -740,17 +740,17 @@ export function createServer() {
     const start = Date.now();
     try {
       const toolResult = normalizeToolExecutionResult(toolName, await runTool(toolName, parsed));
-      const rawText = toolResult.candidateText ?? toolResult.text;
+      const responseText = toolResult.text;
+      const trackingCandidateText = toolResult.candidateText ?? responseText;
 
-      let outputText = rawText;
+      let outputText = responseText;
       let chosenStrategy: CompressionStrategy = 'as-is';
       let budgetForced = false;
       let changed = false;
-      let candidateTokens: number | undefined;
       let outputTokens: number | undefined;
 
       if (toolName !== 'stats_reset') {
-        const optimized = optimizeResponse(rawText, {
+        const optimized = optimizeResponse(responseText, {
           intent: typeof parsed['intent'] === 'string' ? parsed['intent'] : undefined,
           maxOutputTokens,
           preferredStrategy: preferredStrategy(toolName, parsed),
@@ -762,7 +762,6 @@ export function createServer() {
         chosenStrategy = optimized.chosenStrategy;
         budgetForced = optimized.budgetForced;
         changed = optimized.changed;
-        candidateTokens = optimized.inputTokens;
         outputTokens = optimized.outputTokens;
       }
 
@@ -781,9 +780,8 @@ export function createServer() {
           budgetForced,
           latencyMs: Date.now() - start,
           sourceText: toolResult.sourceText,
-          candidateText: rawText,
+          candidateText: trackingCandidateText,
           outputText,
-          candidateTokens,
           outputTokens,
           comparisonBasis: toolResult.comparisonBasis ?? defaultComparisonBasis(toolName),
         });

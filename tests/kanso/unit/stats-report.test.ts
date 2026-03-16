@@ -55,4 +55,30 @@ describe('stats reporting', () => {
     expect(after).toContain('ALL TIME (PROJECT)');
     expect(after).toContain('Total saved:');
   });
+
+  it('keeps total savings positive when a source proxy is smaller than the candidate text', () => {
+    stateDir = useTempStateDir();
+    const state = getAppState();
+
+    state.recordCompressionEvent({
+      tool: 'search',
+      strategy: 'summarize',
+      changed: true,
+      budgetForced: true,
+      latencyMs: 4,
+      sourceText: 'kb=stress-local\nbytes=100\ntokens=10',
+      candidateText: 'candidate '.repeat(120),
+      outputText: 'short summary',
+      tokenProfile: 'generic',
+    });
+
+    const searchTotals = state
+      .getStatsSnapshot()
+      .session.byTool.find(tool => tool.tool === 'search');
+    expect(searchTotals?.compressionSavedTokens).toBeGreaterThan(0);
+    expect(searchTotals?.totalSavedTokens).toBe(
+      (searchTotals?.retrievalSavedTokens ?? 0) + (searchTotals?.compressionSavedTokens ?? 0)
+    );
+    expect(searchTotals?.totalSavedTokens).toBeGreaterThan(0);
+  });
 });

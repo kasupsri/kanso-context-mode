@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { parsePositiveInteger } from './file-selectors.js';
 import { treeFocus } from './workspace-helpers.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface TreeFocusToolInput {
   path?: string;
@@ -25,7 +26,7 @@ export async function treeFocusTool(input: TreeFocusToolInput = {}): Promise<str
   const parsedMaxEntries = parsePositiveInteger(input.max_entries, 'tree_focus.max_entries');
   if (typeof parsedMaxEntries === 'string') return parsedMaxEntries;
 
-  const rootPath = input.path ?? process.cwd();
+  const rootPath = normalizeIncomingPath(input.path ?? process.cwd());
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const entries = await treeFocus({
     rootPath,

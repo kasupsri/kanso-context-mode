@@ -311,10 +311,21 @@ export async function executeFile(
     throw new Error(`Cannot read file "${filePath}": ${String(err)}`);
   }
 
+  const wrappedCode = [
+    `const __kcmFileText = process.env.FILE_CONTENT ?? '';`,
+    `const __kcmFilePath = process.env.FILE_PATH ?? '';`,
+    `void (async (fileText, filePath, fileContent) => {`,
+    userCode,
+    `})(__kcmFileText, __kcmFilePath, __kcmFileText).catch(error => {`,
+    `  console.error(error instanceof Error ? error.stack ?? error.message : String(error));`,
+    `  process.exitCode = 1;`,
+    `});`,
+  ].join('\n');
+
   return executeCode({
     ...options,
     language: 'javascript',
-    code: userCode,
+    code: wrappedCode,
     env: {
       ...(options.env ?? {}),
       FILE_CONTENT: fileContent,

@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
 import { evaluateFilePath } from '../security/policy.js';
 import { getAppState } from '../state/index.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface StatsExportInput {
   path?: string;
@@ -9,7 +10,9 @@ export interface StatsExportInput {
 }
 
 export function statsExportTool(input: StatsExportInput): string {
-  const targetPath = input.path ?? DEFAULT_CONFIG.stats.exportPath;
+  const targetPath = input.path
+    ? normalizeIncomingPath(input.path)
+    : DEFAULT_CONFIG.stats.exportPath;
   if (targetPath) {
     const denied = evaluateFilePath(targetPath);
     if (denied.denied) {

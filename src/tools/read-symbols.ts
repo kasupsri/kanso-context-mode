@@ -5,6 +5,7 @@ import { evaluateFilePath } from '../security/policy.js';
 import { getAppState } from '../state/index.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { extractSymbolsWithTreeSitter } from './symbol-parser.js';
+import { normalizeIncomingPath } from '../utils/path-input.js';
 
 export interface ReadSymbolsToolInput {
   path: string;
@@ -115,34 +116,36 @@ export async function readSymbolsTool(
     return 'Error: read_symbols requires "path"';
   }
 
-  const denied = evaluateFilePath(input.path);
+  const resolvedPath = normalizeIncomingPath(input.path);
+
+  const denied = evaluateFilePath(resolvedPath);
   if (denied.denied) {
     return `Blocked by security policy: file path matches "${denied.matchedPattern}"`;
   }
 
   let fileStats;
   try {
-    fileStats = await stat(input.path);
+    fileStats = await stat(resolvedPath);
   } catch (err) {
-    return `Error reading file "${input.path}": ${String(err)}`;
+    return `Error reading file "${resolvedPath}": ${String(err)}`;
   }
 
   if (!fileStats.isFile()) {
-    return `Error reading file "${input.path}": path is not a regular file`;
+    return `Error reading file "${resolvedPath}": path is not a regular file`;
   }
 
   if (fileStats.size > DEFAULT_CONFIG.sandbox.maxFileBytes) {
     return [
-      `Error reading file "${input.path}": file is too large for read_symbols.`,
+      `Error reading file "${resolvedPath}": file is too large for read_symbols.`,
       `Size: ${fileStats.size} bytes, limit: ${DEFAULT_CONFIG.sandbox.maxFileBytes} bytes.`,
     ].join('\n');
   }
 
   let content: string;
   try {
-    content = await readFile(input.path, 'utf8');
+    content = await readFile(resolvedPath, 'utf8');
   } catch (err) {
-    return `Error reading file "${input.path}": ${String(err)}`;
+    return `Error reading file "${resolvedPath}": ${String(err)}`;
   }
 
   const maxSymbols =
@@ -155,11 +158,11 @@ export async function readSymbolsTool(
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
 
   const allSymbols =
-    (await extractSymbolsWithTreeSitter(input.path, content)) ?? extractSymbols(content);
+    (await extractSymbolsWithTreeSitter(resolvedPath, content)) ?? extractSymbols(content);
   const filtered = filterSymbols(allSymbols, input.query, input.kind ?? 'all');
   const shown = filtered.slice(0, maxSymbols);
 
-  const handle = getAppState().saveHandle(content, input.path);
+  const handle = getAppState().saveHandle(content, resolvedPath);
 
   if (responseMode === 'minimal') {
     const compact = shown
@@ -167,11 +170,11 @@ export async function readSymbolsTool(
       .map(s => `${s.kind}:${s.name}@${s.line}`)
       .join(',');
     return asToolResult(
-      `ok:symbols path=${input.path} total=${filtered.length} shown=${shown.length} list=${compact}`,
+      `ok:symbols path=${resolvedPath} total=${filtered.length} shown=${shown.length} list=${compact}`,
       {
         sourceText: content,
         comparisonBasis: 'full_file',
-        resourceLinks: [contextResourceLink(handle.id, input.path)],
+        resourceLinks: [contextResourceLink(handle.id, resolvedPath)],
       }
     );
   }
@@ -185,7 +188,7 @@ export async function readSymbolsTool(
   return asToolResult(
     [
       '=== Read Symbols ===',
-      `path: ${input.path}`,
+      `path: ${resolvedPath}`,
       `total: ${filtered.length}`,
       `showing: ${shown.length}`,
       input.query ? `query: ${input.query}` : '',
@@ -198,7 +201,7 @@ export async function readSymbolsTool(
       sourceText: content,
       candidateText: lines.join('\n') || '(no symbols)',
       comparisonBasis: 'full_file',
-      resourceLinks: [contextResourceLink(handle.id, input.path)],
+      resourceLinks: [contextResourceLink(handle.id, resolvedPath)],
     }
   );
 }
