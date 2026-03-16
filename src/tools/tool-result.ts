@@ -6,7 +6,19 @@ export type ComparisonBasis =
   | 'raw_diff'
   | 'raw_log'
   | 'indexed_source'
-  | 'session_snapshot_source';
+  | 'session_snapshot_source'
+  | 'workspace_source'
+  | 'terminal_run_output'
+  | 'web_search_source';
+
+export interface ToolResourceLink {
+  type: 'resource_link';
+  uri: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
 
 export interface SessionEventRecord {
   type: string;
@@ -23,6 +35,7 @@ export interface ToolExecutionResult {
   sessionEvents?: SessionEventRecord[];
   host?: HostId;
   externalSessionId?: string;
+  resourceLinks?: ToolResourceLink[];
 }
 
 export function asToolResult(

@@ -9,7 +9,11 @@ const CLAUDE_BLOCK = `# Kanso Context Mode
 Use \`kanso-context-mode\` tools to minimize context usage.
 - Prefer \`execute\` for commands with long output.
 - Prefer \`read_file\`, \`read_symbols\`, and \`read_references\` for code navigation.
+- Prefer \`workspace_search\` and \`tree_focus\` for repo exploration before broad reads.
 - Prefer \`git_focus\` and \`diagnostics_focus\` for diffs and logs.
+- Prefer \`terminal_history\` and \`run_focus\` for prior command output.
+- Use \`web_search\` for grounded web research when configured.
+- Use \`edit_targets\` before editing when the likely files are unclear.
 - On a fresh or resumed conversation, call \`session_resume\` before re-reading large context.
 - Default to \`response_mode: "minimal"\` and \`max_output_tokens: 400\`.
 - Use \`stats_report\` to see estimated token savings.`;

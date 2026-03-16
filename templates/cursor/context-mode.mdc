@@ -8,3 +8,9 @@ Prefer `kanso-context-mode` tools for large outputs and selective retrieval.
 Default to:
 - `response_mode: "minimal"`
 - `max_output_tokens: 400`
+
+Prefer:
+- `workspace_search` and `tree_focus` before broad repo reads
+- `terminal_history` and `run_focus` for prior command output
+- `web_search` for grounded web research when configured
+- `edit_targets` before editing when file targets are unclear

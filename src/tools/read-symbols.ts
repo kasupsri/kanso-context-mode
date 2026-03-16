@@ -1,6 +1,10 @@
 import { readFile, stat } from 'fs/promises';
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { contextResourceLink } from '../resources/registry.js';
 import { evaluateFilePath } from '../security/policy.js';
+import { getAppState } from '../state/index.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
+import { extractSymbolsWithTreeSitter } from './symbol-parser.js';
 
 export interface ReadSymbolsToolInput {
   path: string;
@@ -104,7 +108,9 @@ function filterSymbols(
   });
 }
 
-export async function readSymbolsTool(input: ReadSymbolsToolInput): Promise<string> {
+export async function readSymbolsTool(
+  input: ReadSymbolsToolInput
+): Promise<ToolExecutionResult | string> {
   if (!input.path?.trim()) {
     return 'Error: read_symbols requires "path"';
   }
@@ -148,16 +154,26 @@ export async function readSymbolsTool(input: ReadSymbolsToolInput): Promise<stri
   const includeLineNumbers = input.include_line_numbers ?? true;
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
 
-  const allSymbols = extractSymbols(content);
+  const allSymbols =
+    (await extractSymbolsWithTreeSitter(input.path, content)) ?? extractSymbols(content);
   const filtered = filterSymbols(allSymbols, input.query, input.kind ?? 'all');
   const shown = filtered.slice(0, maxSymbols);
+
+  const handle = getAppState().saveHandle(content, input.path);
 
   if (responseMode === 'minimal') {
     const compact = shown
       .slice(0, 12)
       .map(s => `${s.kind}:${s.name}@${s.line}`)
       .join(',');
-    return `ok:symbols path=${input.path} total=${filtered.length} shown=${shown.length} list=${compact}`;
+    return asToolResult(
+      `ok:symbols path=${input.path} total=${filtered.length} shown=${shown.length} list=${compact}`,
+      {
+        sourceText: content,
+        comparisonBasis: 'full_file',
+        resourceLinks: [contextResourceLink(handle.id, input.path)],
+      }
+    );
   }
 
   const width = String(Math.max(1, ...shown.map(s => s.line))).length;
@@ -166,15 +182,23 @@ export async function readSymbolsTool(input: ReadSymbolsToolInput): Promise<stri
     return `${prefix}${symbol.kind} ${symbol.name} :: ${symbol.signature}`;
   });
 
-  return [
-    '=== Read Symbols ===',
-    `path: ${input.path}`,
-    `total: ${filtered.length}`,
-    `showing: ${shown.length}`,
-    input.query ? `query: ${input.query}` : '',
-    input.kind && input.kind !== 'all' ? `kind: ${input.kind}` : '',
-    lines.join('\n') || '(no symbols)',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  return asToolResult(
+    [
+      '=== Read Symbols ===',
+      `path: ${input.path}`,
+      `total: ${filtered.length}`,
+      `showing: ${shown.length}`,
+      input.query ? `query: ${input.query}` : '',
+      input.kind && input.kind !== 'all' ? `kind: ${input.kind}` : '',
+      lines.join('\n') || '(no symbols)',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    {
+      sourceText: content,
+      candidateText: lines.join('\n') || '(no symbols)',
+      comparisonBasis: 'full_file',
+      resourceLinks: [contextResourceLink(handle.id, input.path)],
+    }
+  );
 }

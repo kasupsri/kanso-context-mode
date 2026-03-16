@@ -2,6 +2,7 @@ import envPaths from 'env-paths';
 
 export type ResponseMode = 'minimal' | 'full';
 export type TokenProfile = 'auto' | 'openai_o200k' | 'openai_cl100k' | 'generic';
+export type WebSearchProvider = 'off' | 'brave_context' | 'firecrawl_search' | 'exa';
 
 export interface KansoConfig {
   compression: {
@@ -52,6 +53,14 @@ export interface KansoConfig {
     searchTopK: number;
     maxFetchBytes: number;
   };
+  web: {
+    provider: WebSearchProvider;
+    cacheTtlHours: number;
+    maxResults: number;
+    braveApiKey?: string;
+    firecrawlApiKey?: string;
+    exaApiKey?: string;
+  };
 }
 
 const paths = envPaths('kanso-context-mode', { suffix: '' });
@@ -81,11 +90,11 @@ export const DEFAULT_CONFIG: KansoConfig = {
   storage: {
     stateDir: paths.data,
     handleTtlHours: 24,
-    hotCacheMB: 4,
-    hotCacheEntries: 32,
-    hotCacheTtlMs: 5 * 60 * 1000,
+    hotCacheMB: 8,
+    hotCacheEntries: 96,
+    hotCacheTtlMs: 10 * 60 * 1000,
     eventRetentionDays: 30,
-    cleanupEveryWrites: 25,
+    cleanupEveryWrites: 64,
     sessionMaxEvents: 100,
     sessionSnapshotBytes: 2048,
   },
@@ -102,5 +111,10 @@ export const DEFAULT_CONFIG: KansoConfig = {
     chunkOverlap: 100,
     searchTopK: 3,
     maxFetchBytes: 1_048_576,
+  },
+  web: {
+    provider: 'off',
+    cacheTtlHours: 24,
+    maxResults: 5,
   },
 };

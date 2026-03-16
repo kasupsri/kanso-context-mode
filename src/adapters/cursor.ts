@@ -12,7 +12,11 @@ alwaysApply: true
 Use \`kanso-context-mode\` tools for token-efficient coding workflows.
 - Prefer \`execute\` for shell commands with large output.
 - Prefer \`read_file\`, \`read_symbols\`, and \`read_references\` for large files.
+- Prefer \`workspace_search\` and \`tree_focus\` for repo exploration before broad reads.
 - Prefer \`git_focus\` and \`diagnostics_focus\` for diffs and logs.
+- Prefer \`terminal_history\` and \`run_focus\` for prior command output.
+- Use \`web_search\` for grounded web research when configured.
+- Use \`edit_targets\` before editing when the likely files are unclear.
 - On a fresh chat, call \`session_resume\` before re-reading large project state.
 - Default to \`response_mode: "minimal"\` and \`max_output_tokens: 400\`.
 - Use \`stats_report\` to verify estimated token savings.`;
@@ -40,7 +44,7 @@ const HOOK_CONFIG = (pkg: string) =>
           {
             command: `npx -y ${pkg} hook cursor pretooluse`,
             matcher:
-              'Shell|Read|Grep|WebFetch|Task|MCP:read_file|MCP:read_symbols|MCP:read_references|MCP:git_focus|MCP:diagnostics_focus|MCP:session_resume',
+              'Shell|Read|Grep|WebFetch|Task|MCP:read_file|MCP:read_symbols|MCP:read_references|MCP:workspace_search|MCP:tree_focus|MCP:git_focus|MCP:diagnostics_focus|MCP:terminal_history|MCP:run_focus|MCP:web_search|MCP:edit_targets|MCP:session_resume',
             failClosed: false,
           },
         ],

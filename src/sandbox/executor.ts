@@ -31,6 +31,7 @@ export interface ExecuteResult {
   timedOut: boolean;
   language: Language;
   durationMs: number;
+  runtime: string;
 }
 
 const HARD_OUTPUT_CAP_BYTES = 2 * 1024 * 1024; // 2MB
@@ -228,6 +229,7 @@ export async function executeCode(options: ExecuteOptions): Promise<ExecuteResul
         result = {
           ...compileResult,
           language: options.language,
+          runtime: runtime.runtimeId ?? runtime.command,
         };
       } else {
         const remainingTimeout = Math.max(1, timeoutMs - compileResult.durationMs);
@@ -243,6 +245,7 @@ export async function executeCode(options: ExecuteOptions): Promise<ExecuteResul
           timedOut: runResult.timedOut,
           language: options.language,
           durationMs: compileResult.durationMs + runResult.durationMs,
+          runtime: runtime.runtimeId ?? runtime.command,
         };
       }
     } else {
@@ -256,6 +259,7 @@ export async function executeCode(options: ExecuteOptions): Promise<ExecuteResul
       result = {
         ...runResult,
         language: options.language,
+        runtime: runtime.runtimeId ?? runtime.command,
       };
     }
 

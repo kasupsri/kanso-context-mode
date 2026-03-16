@@ -2,16 +2,34 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  CompleteRequestSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
+  ReadResourceRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { type CompressionStrategy } from './compression/strategies.js';
 import { optimizeResponse } from './compression/response-optimizer.js';
 import { DEFAULT_CONFIG, type ResponseMode } from './config/defaults.js';
+import {
+  buildPromptMessages,
+  completePromptArgument,
+  listPromptDefinitions,
+} from './prompts/index.js';
+import {
+  completeResourceUri,
+  listKansoResourceTemplates,
+  listKansoResources,
+  readKansoResource,
+} from './resources/registry.js';
 import { getAppState } from './state/index.js';
 import { compressTool } from './tools/compress.js';
 import { diagnosticsFocusTool } from './tools/diagnostics-focus.js';
 import { doctorTool } from './tools/doctor.js';
+import { editTargetsTool } from './tools/edit-targets.js';
 import { executeFileTool } from './tools/execute-file.js';
 import { executeTool } from './tools/execute.js';
 import { fetchAndIndexTool } from './tools/fetch-and-index.js';
@@ -20,22 +38,24 @@ import { indexContentTool } from './tools/index-content.js';
 import { readFileTool } from './tools/read-file.js';
 import { readReferencesTool } from './tools/read-references.js';
 import { readSymbolsTool } from './tools/read-symbols.js';
+import { rewritePreviewTool } from './tools/rewrite-preview.js';
+import { runFocusTool } from './tools/run-focus.js';
 import { searchTool } from './tools/search.js';
 import { sessionResumeTool } from './tools/session-resume.js';
 import { statsExportTool } from './tools/stats-export.js';
 import { statsReportTool } from './tools/stats-report.js';
 import { statsResetTool } from './tools/stats-reset.js';
+import { structureSearchTool } from './tools/structure-search.js';
+import { terminalHistoryTool } from './tools/terminal-history.js';
+import { treeFocusTool } from './tools/tree-focus.js';
 import { type ComparisonBasis, type ToolExecutionResult } from './tools/tool-result.js';
+import { webSearchTool } from './tools/web-search.js';
+import { workspaceSearchTool } from './tools/workspace-search.js';
 import { logger } from './utils/logger.js';
 import { APP_VERSION } from './version.js';
 
-interface SchemaProperty {
-  type?: string;
-  enum?: string[];
-}
-
 interface ToolSchema {
-  properties?: Record<string, SchemaProperty>;
+  properties?: Record<string, Record<string, unknown>>;
   required?: string[];
 }
 
@@ -55,12 +75,16 @@ const ULTRA_FIRST_TOOLS = new Set([
   'read_references',
   'diagnostics_focus',
   'git_focus',
+  'workspace_search',
+  'terminal_history',
+  'run_focus',
   'stats_report',
   'doctor',
 ]);
 const COMPARISON_BASIS_BY_TOOL: Record<string, ComparisonBasis> = {
   compress: 'raw_output',
   diagnostics_focus: 'raw_log',
+  edit_targets: 'workspace_source',
   execute: 'raw_output',
   execute_file: 'raw_output',
   fetch_and_index: 'indexed_source',
@@ -69,8 +93,15 @@ const COMPARISON_BASIS_BY_TOOL: Record<string, ComparisonBasis> = {
   read_file: 'full_file',
   read_references: 'full_file',
   read_symbols: 'full_file',
+  rewrite_preview: 'workspace_source',
+  run_focus: 'terminal_run_output',
   search: 'indexed_source',
   session_resume: 'session_snapshot_source',
+  structure_search: 'workspace_source',
+  terminal_history: 'terminal_run_output',
+  tree_focus: 'workspace_source',
+  web_search: 'web_search_source',
+  workspace_search: 'workspace_source',
 };
 
 const TOOLS: Tool[] = [
@@ -105,17 +136,52 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'workspace_search',
+    description: 'Search the workspace with ripgrep-first retrieval and compact grouped snippets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        root_path: { type: 'string' },
+        glob: { type: 'string' },
+        max_matches: { type: 'number' },
+        context_lines: { type: 'number' },
+        case_sensitive: { type: 'boolean' },
+        whole_word: { type: 'boolean' },
+        include_line_numbers: { type: 'boolean' },
+        return_context_id: { type: 'boolean' },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'tree_focus',
+    description: 'Return a bounded directory tree summary optimized for repo exploration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        depth: { type: 'number' },
+        max_entries: { type: 'number' },
+        include_hidden: { type: 'boolean' },
+        glob: { type: 'string' },
+        max_output_tokens: { type: 'number' },
+      },
+    },
+  },
+  {
     name: 'fetch_and_index',
     description: 'Fetch public documentation or text content, convert it, and index it locally.',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string' },
+        urls: { type: 'array' },
         kb_name: { type: 'string' },
         chunk_size: { type: 'number' },
         max_output_tokens: { type: 'number' },
       },
-      required: ['url'],
     },
   },
   {
@@ -167,6 +233,8 @@ const TOOLS: Tool[] = [
         intent: { type: 'string' },
         timeout: { type: 'number' },
         max_output_tokens: { type: 'number' },
+        return_context_id: { type: 'boolean' },
+        record_session: { type: 'boolean' },
         shell_runtime: {
           type: 'string',
           enum: ['auto', 'powershell', 'cmd', 'git-bash', 'bash', 'zsh', 'sh'],
@@ -187,6 +255,8 @@ const TOOLS: Tool[] = [
         intent: { type: 'string' },
         timeout: { type: 'number' },
         max_output_tokens: { type: 'number' },
+        return_context_id: { type: 'boolean' },
+        record_session: { type: 'boolean' },
       },
       required: ['file_path', 'code'],
     },
@@ -295,6 +365,82 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'structure_search',
+    description: 'Use ast-grep for syntax-aware search when the CLI is available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string' },
+        path: { type: 'string' },
+        language: { type: 'string' },
+        max_matches: { type: 'number' },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'rewrite_preview',
+    description: 'Preview structural rewrites with ast-grep without mutating files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string' },
+        rewrite: { type: 'string' },
+        path: { type: 'string' },
+        language: { type: 'string' },
+        max_matches: { type: 'number' },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['pattern', 'rewrite'],
+    },
+  },
+  {
+    name: 'web_search',
+    description:
+      'Query a configured web provider and return compact results plus reusable context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        domains: { type: 'array' },
+        result_limit: { type: 'number' },
+        recency_days: { type: 'number' },
+        kind: { type: 'string', enum: ['general', 'docs', 'code', 'news'] },
+        provider: { type: 'string', enum: ['off', 'brave_context', 'firecrawl_search', 'exa'] },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'terminal_history',
+    description: 'List recorded terminal runs with reusable run/context links.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number' },
+        failed_only: { type: 'boolean' },
+        query: { type: 'string' },
+        cwd: { type: 'string' },
+        with_output_handles: { type: 'boolean' },
+        max_output_tokens: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'run_focus',
+    description: 'Inspect one recorded run without replaying the original command.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'number' },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['run_id'],
+    },
+  },
+  {
     name: 'session_resume',
     description: 'Return a compact project/session resume snapshot for the current host.',
     inputSchema: {
@@ -305,6 +451,22 @@ const TOOLS: Tool[] = [
         max_events: { type: 'number' },
         max_output_tokens: { type: 'number' },
       },
+    },
+  },
+  {
+    name: 'edit_targets',
+    description: 'Rank likely files and line ranges for a requested coding task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string' },
+        paths: { type: 'array' },
+        max_files: { type: 'number' },
+        include_symbols: { type: 'boolean' },
+        include_references: { type: 'boolean' },
+        max_output_tokens: { type: 'number' },
+      },
+      required: ['task'],
     },
   },
   {
@@ -411,6 +573,12 @@ async function runTool(
       return await indexContentTool(args as unknown as Parameters<typeof indexContentTool>[0]);
     case 'search':
       return await searchTool(args as unknown as Parameters<typeof searchTool>[0]);
+    case 'workspace_search':
+      return await workspaceSearchTool(
+        args as unknown as Parameters<typeof workspaceSearchTool>[0]
+      );
+    case 'tree_focus':
+      return await treeFocusTool(args as unknown as Parameters<typeof treeFocusTool>[0]);
     case 'fetch_and_index':
       return await fetchAndIndexTool(args as unknown as Parameters<typeof fetchAndIndexTool>[0]);
     case 'compress':
@@ -429,8 +597,20 @@ async function runTool(
       return await gitFocusTool(args as unknown as Parameters<typeof gitFocusTool>[0]);
     case 'diagnostics_focus':
       return diagnosticsFocusTool(args as unknown as Parameters<typeof diagnosticsFocusTool>[0]);
+    case 'structure_search':
+      return structureSearchTool(args as unknown as Parameters<typeof structureSearchTool>[0]);
+    case 'rewrite_preview':
+      return rewritePreviewTool(args as unknown as Parameters<typeof rewritePreviewTool>[0]);
+    case 'web_search':
+      return await webSearchTool(args as unknown as Parameters<typeof webSearchTool>[0]);
+    case 'terminal_history':
+      return terminalHistoryTool(args as unknown as Parameters<typeof terminalHistoryTool>[0]);
+    case 'run_focus':
+      return runFocusTool(args as unknown as Parameters<typeof runFocusTool>[0]);
     case 'session_resume':
       return sessionResumeTool(args as unknown as Parameters<typeof sessionResumeTool>[0]);
+    case 'edit_targets':
+      return await editTargetsTool(args as unknown as Parameters<typeof editTargetsTool>[0]);
     case 'stats_report':
       return statsReportTool(args as unknown as Parameters<typeof statsReportTool>[0]);
     case 'stats_export':
@@ -477,10 +657,75 @@ export function createServer() {
     },
     {
       capabilities: {
-        tools: {},
+        completions: {},
+        prompts: {
+          listChanged: true,
+        },
+        resources: {
+          listChanged: true,
+        },
+        tools: {
+          listChanged: true,
+        },
       },
     }
   );
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: listKansoResources(),
+  }));
+
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+    resourceTemplates: listKansoResourceTemplates(),
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async request =>
+    readKansoResource(request.params.uri)
+  );
+
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: listPromptDefinitions().map(prompt => ({
+      name: prompt.name,
+      title: prompt.title,
+      description: prompt.description,
+      arguments: prompt.arguments,
+    })),
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async request => {
+    const prompt = listPromptDefinitions().find(item => item.name === request.params.name);
+    if (!prompt) {
+      throw new Error(`Unknown prompt: ${request.params.name}`);
+    }
+
+    return {
+      description: prompt.description,
+      messages: buildPromptMessages(request.params.name, request.params.arguments ?? {}),
+    };
+  });
+
+  server.setRequestHandler(CompleteRequestSchema, async request => {
+    const values =
+      request.params.ref.type === 'ref/resource'
+        ? completeResourceUri(
+            request.params.ref.uri,
+            request.params.argument.name,
+            request.params.argument.value
+          )
+        : completePromptArgument(
+            request.params.ref.name,
+            request.params.argument.name,
+            request.params.argument.value
+          );
+    const limited = [...new Set(values)].slice(0, 100);
+    return {
+      completion: {
+        values: limited,
+        total: limited.length,
+        hasMore: false,
+      },
+    };
+  });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
@@ -544,8 +789,12 @@ export function createServer() {
         });
       }
 
+      const resourceLinks = toolResult.resourceLinks ?? [];
       return {
-        content: [{ type: 'text', text: outputText }],
+        content: [
+          { type: 'text', text: outputText || 'ok' },
+          ...resourceLinks.map(link => ({ ...link })),
+        ],
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

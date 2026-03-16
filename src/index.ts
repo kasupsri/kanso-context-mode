@@ -19,6 +19,7 @@ function applyRuntimeConfig(): void {
   Object.assign(DEFAULT_CONFIG.logging, merged.logging);
   Object.assign(DEFAULT_CONFIG.stats, merged.stats);
   Object.assign(DEFAULT_CONFIG.knowledgeBase, merged.knowledgeBase);
+  Object.assign(DEFAULT_CONFIG.web, merged.web);
   logger.setLevel(merged.logging.level);
 }
 

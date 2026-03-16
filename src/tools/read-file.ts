@@ -1,4 +1,6 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { contextResourceLink } from '../resources/registry.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import {
   parseCursorLine,
   parsePositiveInteger,
@@ -24,7 +26,9 @@ export interface ReadFileToolInput {
   response_mode?: ResponseMode;
 }
 
-export async function readFileTool(input: ReadFileToolInput): Promise<string> {
+export async function readFileTool(
+  input: ReadFileToolInput
+): Promise<ToolExecutionResult | string> {
   const parsedStart = parsePositiveInteger(input.start_line, 'read_file.start_line');
   if (typeof parsedStart === 'string') return parsedStart;
   const parsedEnd = parsePositiveInteger(input.end_line, 'read_file.end_line');
@@ -95,5 +99,10 @@ export async function readFileTool(input: ReadFileToolInput): Promise<string> {
   if (loaded.fromHandle) lines.push('handle: hit');
   lines.push(text || '(empty)');
 
-  return lines.join('\n');
+  return asToolResult(lines.join('\n'), {
+    sourceText: loaded.content,
+    candidateText: text || lines.join('\n'),
+    comparisonBasis: 'full_file',
+    resourceLinks: [contextResourceLink(loaded.contextId, loaded.sourceLabel)],
+  });
 }

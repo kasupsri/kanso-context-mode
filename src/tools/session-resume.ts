@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { sessionResourceLink } from '../resources/registry.js';
 import { type HostId } from '../runtime/host.js';
 import { getAppState } from '../state/index.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
@@ -32,5 +33,6 @@ export function sessionResumeTool(input: SessionResumeToolInput = {}): ToolExecu
     sourceText: snapshot.text,
     candidateText: snapshot.text,
     comparisonBasis: 'session_snapshot_source',
+    resourceLinks: [sessionResourceLink(snapshot.host, snapshot.externalSessionId ?? 'latest')],
   });
 }

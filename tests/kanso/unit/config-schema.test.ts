@@ -7,6 +7,9 @@ const ENV_KEYS = [
   'KCM_MAX_FILE_BYTES',
   'KCM_HANDLE_TTL_HOURS',
   'KCM_HOT_CACHE_MB',
+  'KCM_HOT_CACHE_ENTRIES',
+  'KCM_HOT_CACHE_TTL_MS',
+  'KCM_CLEANUP_EVERY_WRITES',
   'KCM_SESSION_MAX_EVENTS',
   'KCM_SESSION_SNAPSHOT_BYTES',
   'KCM_DEFAULT_MAX_OUTPUT_TOKENS',
@@ -37,6 +40,9 @@ describe('config schema', () => {
     process.env['KCM_MAX_FILE_BYTES'] = '2048';
     process.env['KCM_HANDLE_TTL_HOURS'] = '12';
     process.env['KCM_HOT_CACHE_MB'] = '8';
+    process.env['KCM_HOT_CACHE_ENTRIES'] = '64';
+    process.env['KCM_HOT_CACHE_TTL_MS'] = '600000';
+    process.env['KCM_CLEANUP_EVERY_WRITES'] = '80';
     process.env['KCM_SESSION_MAX_EVENTS'] = '48';
     process.env['KCM_SESSION_SNAPSHOT_BYTES'] = '4096';
     process.env['KCM_DEFAULT_MAX_OUTPUT_TOKENS'] = '500';
@@ -54,6 +60,9 @@ describe('config schema', () => {
     expect(cfg.sandbox?.maxFileBytes).toBe(2048);
     expect(cfg.storage?.handleTtlHours).toBe(12);
     expect(cfg.storage?.hotCacheMB).toBe(8);
+    expect(cfg.storage?.hotCacheEntries).toBe(64);
+    expect(cfg.storage?.hotCacheTtlMs).toBe(600000);
+    expect(cfg.storage?.cleanupEveryWrites).toBe(80);
     expect(cfg.storage?.sessionMaxEvents).toBe(48);
     expect(cfg.storage?.sessionSnapshotBytes).toBe(4096);
     expect(cfg.storage?.stateDir).toBe('/tmp/kcm-state');
@@ -69,6 +78,9 @@ describe('config schema', () => {
   it('ignores invalid numeric and enum values', () => {
     process.env['KCM_TIMEOUT_MS'] = '-5';
     process.env['KCM_HOT_CACHE_MB'] = 'zero';
+    process.env['KCM_HOT_CACHE_ENTRIES'] = '-1';
+    process.env['KCM_HOT_CACHE_TTL_MS'] = 'nope';
+    process.env['KCM_CLEANUP_EVERY_WRITES'] = '0';
     process.env['KCM_SESSION_MAX_EVENTS'] = '0';
     process.env['KCM_POLICY_MODE'] = 'unsafe';
     process.env['KCM_TOKEN_PROFILE'] = 'claude';
@@ -78,6 +90,9 @@ describe('config schema', () => {
 
     expect(cfg.sandbox?.timeoutMs).toBeUndefined();
     expect(cfg.storage?.hotCacheMB).toBeUndefined();
+    expect(cfg.storage?.hotCacheEntries).toBeUndefined();
+    expect(cfg.storage?.hotCacheTtlMs).toBeUndefined();
+    expect(cfg.storage?.cleanupEveryWrites).toBeUndefined();
     expect(cfg.storage?.sessionMaxEvents).toBeUndefined();
     expect(cfg.security?.policyMode).toBeUndefined();
     expect(cfg.tokens?.profile).toBeUndefined();

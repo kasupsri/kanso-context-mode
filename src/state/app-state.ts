@@ -14,11 +14,23 @@ import {
 } from '../utils/token-estimator.js';
 import { HotHandleCache, type HotCacheStats } from './hot-cache.js';
 
+const HANDLE_TOUCH_FLUSH_LIMIT = 64;
+
 export interface ContentHandleRow {
   id: string;
   projectId: string;
   sourcePath: string | null;
   content: string;
+  sizeBytes: number;
+  createdAt: string;
+  expiresAt: string;
+  lastAccessedAt: string;
+  accessCount: number;
+}
+
+export interface ContentHandleSummary {
+  id: string;
+  sourcePath: string | null;
   sizeBytes: number;
   createdAt: string;
   expiresAt: string;
@@ -95,6 +107,68 @@ export interface KnowledgeSearchResult {
   snippet: string;
   score: number;
   kbName: string;
+}
+
+export interface KnowledgeBaseSummary {
+  kbName: string;
+  sources: number;
+  chunkCount: number;
+}
+
+export interface TerminalRunInput {
+  command: string;
+  cwd: string;
+  language: string;
+  runtime?: string | null;
+  exitCode: number;
+  timedOut: boolean;
+  durationMs: number;
+  outputHandleId?: string | null;
+  outputText?: string;
+  stderrText?: string;
+}
+
+export interface TerminalRunRecord {
+  id: number;
+  sessionId: string;
+  command: string;
+  cwd: string;
+  language: string;
+  runtime: string | null;
+  exitCode: number;
+  timedOut: boolean;
+  durationMs: number;
+  outputHandleId: string | null;
+  outputPreview: string;
+  stderrFingerprint: string | null;
+  createdAt: string;
+}
+
+export interface TerminalRunQuery {
+  limit?: number;
+  failedOnly?: boolean;
+  query?: string;
+  cwd?: string;
+}
+
+export interface WebSearchCacheInput {
+  provider: string;
+  queryKey: string;
+  queryText: string;
+  resultCount: number;
+  responseJson: string;
+  sourceText: string;
+}
+
+export interface WebSearchCacheRecord {
+  provider: string;
+  queryKey: string;
+  queryText: string;
+  resultCount: number;
+  responseJson: string;
+  sourceText: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface SessionResumeSnapshot {
@@ -224,6 +298,16 @@ function buildSnippet(content: string, query: string, size = 220): string {
   return `${prefix}${trimmed.slice(start, end)}${suffix}`;
 }
 
+function previewText(text: string, maxChars = 280): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+function stderrFingerprint(text?: string): string | null {
+  const normalized = (text ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  return hashText(normalized).slice(0, 16);
+}
+
 function uniqueValues(rows: SessionEventRow[], category: string, limit: number): string[] {
   const seen = new Set<string>();
   const values: string[] = [];
@@ -245,7 +329,12 @@ export class AppState {
   private readonly hostInfo: HostInfo;
   private sessionId: string;
   private readonly dbPath: string;
-  private readonly hotCache: HotHandleCache;
+  private readonly hotCache: HotHandleCache<ContentHandleRow>;
+  private readonly pendingHandleTouches = new Map<
+    string,
+    { lastAccessedAt: string; accessCountDelta: number }
+  >();
+  private pendingHandleTouchCount = 0;
   private writesSinceCleanup = 0;
   private fts5Ready: boolean | null = null;
 
@@ -260,7 +349,7 @@ export class AppState {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
-    this.hotCache = new HotHandleCache({
+    this.hotCache = new HotHandleCache<ContentHandleRow>({
       maxEntries: DEFAULT_CONFIG.storage.hotCacheEntries,
       maxBytes: DEFAULT_CONFIG.storage.hotCacheMB * 1024 * 1024,
       ttlMs: DEFAULT_CONFIG.storage.hotCacheTtlMs,
@@ -341,17 +430,42 @@ export class AppState {
         createdAt
       );
 
-    this.hotCache.put(id, content);
+    const row = this.readHandleRow(id) ?? {
+      id,
+      projectId: this.projectId,
+      sourcePath: sourcePath ?? null,
+      content,
+      sizeBytes,
+      createdAt,
+      expiresAt,
+      lastAccessedAt: createdAt,
+      accessCount: 0,
+    };
+    this.hotCache.put(id, row, row.sizeBytes);
     this.afterWrite();
-    return this.getHandle(id)!;
+    return { ...row };
   }
 
   getHandle(id: string): ContentHandleRow | undefined {
     const cached = this.hotCache.get(id);
     if (cached !== undefined) {
-      this.touchHandle(id);
-      const row = this.readHandleRow(id);
-      if (row) return { ...row, content: cached };
+      if (new Date(cached.expiresAt).getTime() < Date.now()) {
+        const pending = this.pendingHandleTouches.get(id);
+        if (pending) {
+          this.pendingHandleTouchCount = Math.max(
+            0,
+            this.pendingHandleTouchCount - pending.accessCountDelta
+          );
+          this.pendingHandleTouches.delete(id);
+        }
+        this.hotCache.delete(id);
+        this.db
+          .prepare('DELETE FROM content_handles WHERE id = ? AND project_id = ?')
+          .run(id, this.projectId);
+        this.afterWrite();
+        return undefined;
+      }
+      return this.recordHandleAccess(cached);
     }
 
     const row = this.readHandleRow(id);
@@ -362,9 +476,76 @@ export class AppState {
       return undefined;
     }
 
-    this.hotCache.put(id, row.content);
-    this.touchHandle(id);
-    return row;
+    this.hotCache.put(id, row, row.sizeBytes);
+    return this.recordHandleAccess(row);
+  }
+
+  listRecentHandles(limit = 20): ContentHandleRow[] {
+    this.flushPendingHandleTouches();
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const rows = this.db
+      .prepare(
+        `SELECT id, project_id, source_path, content, size_bytes, created_at, expires_at, last_accessed_at, access_count
+         FROM content_handles
+         WHERE project_id = ?
+         ORDER BY last_accessed_at DESC, created_at DESC
+         LIMIT ?`
+      )
+      .all(this.projectId, safeLimit) as Array<{
+      id: string;
+      project_id: string;
+      source_path: string | null;
+      content: string;
+      size_bytes: number;
+      created_at: string;
+      expires_at: string;
+      last_accessed_at: string;
+      access_count: number;
+    }>;
+
+    return rows.map(row => ({
+      id: row.id,
+      projectId: row.project_id,
+      sourcePath: row.source_path,
+      content: row.content,
+      sizeBytes: row.size_bytes,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      lastAccessedAt: row.last_accessed_at,
+      accessCount: row.access_count,
+    }));
+  }
+
+  listRecentHandleSummaries(limit = 20): ContentHandleSummary[] {
+    this.flushPendingHandleTouches();
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const rows = this.db
+      .prepare(
+        `SELECT id, source_path, size_bytes, created_at, expires_at, last_accessed_at, access_count
+         FROM content_handles
+         WHERE project_id = ?
+         ORDER BY last_accessed_at DESC, created_at DESC
+         LIMIT ?`
+      )
+      .all(this.projectId, safeLimit) as Array<{
+      id: string;
+      source_path: string | null;
+      size_bytes: number;
+      created_at: string;
+      expires_at: string;
+      last_accessed_at: string;
+      access_count: number;
+    }>;
+
+    return rows.map(row => ({
+      id: row.id,
+      sourcePath: row.source_path,
+      sizeBytes: row.size_bytes,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      lastAccessedAt: row.last_accessed_at,
+      accessCount: row.access_count,
+    }));
   }
 
   recordCompressionEvent(input: CompressionEventInput): void {
@@ -643,6 +824,248 @@ export class AppState {
     };
   }
 
+  listKnowledgeBases(limit = 20): KnowledgeBaseSummary[] {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const rows = this.db
+      .prepare(
+        `SELECT
+          kb_name,
+          COUNT(*) AS sources,
+          COALESCE(SUM(chunk_count), 0) AS chunk_count
+        FROM kb_sources
+        WHERE project_id = ?
+        GROUP BY kb_name
+        ORDER BY kb_name ASC
+        LIMIT ?`
+      )
+      .all(this.projectId, safeLimit) as Array<{
+      kb_name: string;
+      sources: number;
+      chunk_count: number;
+    }>;
+
+    return rows.map(row => ({
+      kbName: row.kb_name,
+      sources: Number(row.sources ?? 0),
+      chunkCount: Number(row.chunk_count ?? 0),
+    }));
+  }
+
+  recordTerminalRun(input: TerminalRunInput): TerminalRunRecord {
+    const createdAt = nowIso();
+    const preview = previewText(input.outputText ?? '');
+    const fingerprint = stderrFingerprint(input.stderrText);
+    const info = this.db
+      .prepare(
+        `INSERT INTO terminal_runs (
+          project_id, session_id, command_text, cwd, language, runtime,
+          exit_code, timed_out, duration_ms, output_handle_id, output_preview, stderr_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        this.projectId,
+        this.sessionId,
+        input.command,
+        input.cwd,
+        input.language,
+        input.runtime ?? null,
+        input.exitCode,
+        input.timedOut ? 1 : 0,
+        Math.max(0, Math.round(input.durationMs)),
+        input.outputHandleId ?? null,
+        preview,
+        fingerprint,
+        createdAt
+      );
+    this.afterWrite();
+    return this.getTerminalRun(Number(info.lastInsertRowid))!;
+  }
+
+  getTerminalRun(id: number): TerminalRunRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT id, session_id, command_text, cwd, language, runtime,
+                exit_code, timed_out, duration_ms, output_handle_id, output_preview, stderr_fingerprint, created_at
+         FROM terminal_runs
+         WHERE project_id = ? AND id = ?`
+      )
+      .get(this.projectId, id) as
+      | {
+          id: number;
+          session_id: string;
+          command_text: string;
+          cwd: string;
+          language: string;
+          runtime: string | null;
+          exit_code: number;
+          timed_out: number;
+          duration_ms: number;
+          output_handle_id: string | null;
+          output_preview: string;
+          stderr_fingerprint: string | null;
+          created_at: string;
+        }
+      | undefined;
+
+    if (!row) return undefined;
+    return {
+      id: Number(row.id),
+      sessionId: row.session_id,
+      command: row.command_text,
+      cwd: row.cwd,
+      language: row.language,
+      runtime: row.runtime,
+      exitCode: Number(row.exit_code ?? 0),
+      timedOut: Boolean(row.timed_out),
+      durationMs: Number(row.duration_ms ?? 0),
+      outputHandleId: row.output_handle_id,
+      outputPreview: row.output_preview,
+      stderrFingerprint: row.stderr_fingerprint,
+      createdAt: row.created_at,
+    };
+  }
+
+  listTerminalRuns(query: TerminalRunQuery = {}): TerminalRunRecord[] {
+    const limit = Math.max(1, Math.min(query.limit ?? 20, 100));
+    const clauses = ['project_id = ?'];
+    const params: Array<string | number> = [this.projectId];
+
+    if (query.failedOnly) {
+      clauses.push('(exit_code != 0 OR timed_out = 1)');
+    }
+
+    if (query.query?.trim()) {
+      clauses.push('(LOWER(command_text) LIKE ? OR LOWER(output_preview) LIKE ?)');
+      const pattern = `%${query.query.trim().toLowerCase()}%`;
+      params.push(pattern, pattern);
+    }
+
+    if (query.cwd?.trim()) {
+      clauses.push('LOWER(cwd) LIKE ?');
+      params.push(`%${query.cwd.trim().toLowerCase()}%`);
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT id, session_id, command_text, cwd, language, runtime,
+                exit_code, timed_out, duration_ms, output_handle_id, output_preview, stderr_fingerprint, created_at
+         FROM terminal_runs
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`
+      )
+      .all(...params, limit) as Array<{
+      id: number;
+      session_id: string;
+      command_text: string;
+      cwd: string;
+      language: string;
+      runtime: string | null;
+      exit_code: number;
+      timed_out: number;
+      duration_ms: number;
+      output_handle_id: string | null;
+      output_preview: string;
+      stderr_fingerprint: string | null;
+      created_at: string;
+    }>;
+
+    return rows.map(row => ({
+      id: Number(row.id),
+      sessionId: row.session_id,
+      command: row.command_text,
+      cwd: row.cwd,
+      language: row.language,
+      runtime: row.runtime,
+      exitCode: Number(row.exit_code ?? 0),
+      timedOut: Boolean(row.timed_out),
+      durationMs: Number(row.duration_ms ?? 0),
+      outputHandleId: row.output_handle_id,
+      outputPreview: row.output_preview,
+      stderrFingerprint: row.stderr_fingerprint,
+      createdAt: row.created_at,
+    }));
+  }
+
+  getLatestTerminalRuns(limit = 10): TerminalRunRecord[] {
+    return this.listTerminalRuns({ limit });
+  }
+
+  putWebSearchCache(input: WebSearchCacheInput): void {
+    const createdAt = nowIso();
+    const expiresAt = new Date(
+      Date.now() + DEFAULT_CONFIG.web.cacheTtlHours * 60 * 60 * 1000
+    ).toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO web_search_cache (
+          project_id, provider, query_key, query_text, result_count, response_json, source_text, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, provider, query_key) DO UPDATE SET
+          query_text = excluded.query_text,
+          result_count = excluded.result_count,
+          response_json = excluded.response_json,
+          source_text = excluded.source_text,
+          created_at = excluded.created_at,
+          expires_at = excluded.expires_at`
+      )
+      .run(
+        this.projectId,
+        input.provider,
+        input.queryKey,
+        input.queryText,
+        input.resultCount,
+        input.responseJson,
+        input.sourceText,
+        createdAt,
+        expiresAt
+      );
+    this.afterWrite();
+  }
+
+  getWebSearchCache(provider: string, queryKey: string): WebSearchCacheRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT provider, query_key, query_text, result_count, response_json, source_text, created_at, expires_at
+         FROM web_search_cache
+         WHERE project_id = ? AND provider = ? AND query_key = ?`
+      )
+      .get(this.projectId, provider, queryKey) as
+      | {
+          provider: string;
+          query_key: string;
+          query_text: string;
+          result_count: number;
+          response_json: string;
+          source_text: string;
+          created_at: string;
+          expires_at: string;
+        }
+      | undefined;
+
+    if (!row) return undefined;
+    if (new Date(row.expires_at).getTime() < Date.now()) {
+      this.db
+        .prepare(
+          'DELETE FROM web_search_cache WHERE project_id = ? AND provider = ? AND query_key = ?'
+        )
+        .run(this.projectId, provider, queryKey);
+      this.afterWrite();
+      return undefined;
+    }
+
+    return {
+      provider: row.provider,
+      queryKey: row.query_key,
+      queryText: row.query_text,
+      resultCount: Number(row.result_count ?? 0),
+      responseJson: row.response_json,
+      sourceText: row.source_text,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+    };
+  }
+
   recordSessionEvents(
     host: HostId,
     events: SessionEventRecord[],
@@ -713,6 +1136,8 @@ export class AppState {
     const decisions = uniqueValues(rows, 'decision', 6);
     const errors = uniqueValues(rows, 'error', 5);
     const gitOps = uniqueValues(rows, 'git', 5);
+    const commands = uniqueValues(rows, 'command', 6);
+    const webLookups = uniqueValues(rows, 'web', 5);
     const recent = rows.slice(-8).map(row => `${row.category}: ${row.data}`);
 
     const sections = [
@@ -724,6 +1149,8 @@ export class AppState {
       decisions.length > 0 ? `decisions: ${decisions.join(' | ')}` : '',
       errors.length > 0 ? `errors: ${errors.join(' | ')}` : '',
       gitOps.length > 0 ? `git: ${gitOps.join(' | ')}` : '',
+      commands.length > 0 ? `commands: ${commands.join(' | ')}` : '',
+      webLookups.length > 0 ? `web: ${webLookups.join(' | ')}` : '',
       recent.length > 0 ? `recent: ${recent.join(' || ')}` : '',
     ]
       .filter(Boolean)
@@ -987,13 +1414,17 @@ export class AppState {
   }
 
   resetSession(): string {
+    this.flushPendingHandleTouches();
     this.db.prepare('UPDATE sessions SET ended_at = ? WHERE id = ?').run(nowIso(), this.sessionId);
     this.sessionId = this.createSession();
     this.hotCache.clear();
+    this.pendingHandleTouches.clear();
+    this.pendingHandleTouchCount = 0;
     return this.sessionId;
   }
 
   close(): void {
+    this.flushPendingHandleTouches();
     this.db.close();
   }
 
@@ -1108,6 +1539,25 @@ export class AppState {
         FOREIGN KEY(project_id) REFERENCES projects(id)
       );
 
+      CREATE TABLE IF NOT EXISTS terminal_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        command_text TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        language TEXT NOT NULL,
+        runtime TEXT,
+        exit_code INTEGER NOT NULL,
+        timed_out INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        output_handle_id TEXT,
+        output_preview TEXT NOT NULL,
+        stderr_fingerprint TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES projects(id),
+        FOREIGN KEY(session_id) REFERENCES sessions(id)
+      );
+
       CREATE TABLE IF NOT EXISTS kb_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL,
@@ -1135,6 +1585,21 @@ export class AppState {
         FOREIGN KEY(source_id) REFERENCES kb_sources(id) ON DELETE CASCADE,
         FOREIGN KEY(project_id) REFERENCES projects(id)
       );
+
+      CREATE TABLE IF NOT EXISTS web_search_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        query_key TEXT NOT NULL,
+        query_text TEXT NOT NULL,
+        result_count INTEGER NOT NULL,
+        response_json TEXT NOT NULL,
+        source_text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        UNIQUE(project_id, provider, query_key),
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      );
     `);
 
     if (this.isFts5Ready()) {
@@ -1152,8 +1617,11 @@ export class AppState {
       CREATE INDEX IF NOT EXISTS idx_events_project_created ON compression_events(project_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_rollups_scope ON daily_rollups(scope, scope_id, day);
       CREATE INDEX IF NOT EXISTS idx_session_events_lookup ON session_events(project_id, host, external_session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_terminal_runs_lookup ON terminal_runs(project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_terminal_runs_session ON terminal_runs(session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_kb_sources_lookup ON kb_sources(project_id, kb_name, source_label);
       CREATE INDEX IF NOT EXISTS idx_kb_chunks_lookup ON kb_chunks(project_id, kb_name, source_id);
+      CREATE INDEX IF NOT EXISTS idx_web_search_cache_lookup ON web_search_cache(project_id, provider, expires_at);
     `);
   }
 
@@ -1174,6 +1642,44 @@ export class AppState {
       .prepare('INSERT INTO sessions (id, project_id, host, started_at) VALUES (?, ?, ?, ?)')
       .run(id, this.projectId, this.hostInfo.id, nowIso());
     return id;
+  }
+
+  listExternalSessionIds(host: HostId, limit = 10): string[] {
+    const safeLimit = Math.max(1, Math.min(limit, 50));
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT external_session_id
+         FROM session_events
+         WHERE project_id = ? AND host = ? AND external_session_id IS NOT NULL
+         ORDER BY external_session_id DESC
+         LIMIT ?`
+      )
+      .all(this.projectId, host, safeLimit) as Array<{ external_session_id: string | null }>;
+    return rows
+      .map(row => row.external_session_id)
+      .filter((value): value is string => Boolean(value));
+  }
+
+  listRecentSessionValues(category: string, limit = 10): string[] {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const rows = this.db
+      .prepare(
+        `SELECT data
+         FROM session_events
+         WHERE project_id = ? AND category = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`
+      )
+      .all(this.projectId, category, safeLimit * 3) as Array<{ data: string }>;
+    const values: string[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (!row.data || seen.has(row.data)) continue;
+      seen.add(row.data);
+      values.push(row.data);
+      if (values.length >= safeLimit) break;
+    }
+    return values;
   }
 
   private getLatestExternalSessionId(host: HostId): string | null {
@@ -1223,18 +1729,52 @@ export class AppState {
     };
   }
 
-  private touchHandle(id: string): void {
-    this.db
-      .prepare(
-        'UPDATE content_handles SET last_accessed_at = ?, access_count = access_count + 1 WHERE id = ? AND project_id = ?'
-      )
-      .run(nowIso(), id, this.projectId);
+  private recordHandleAccess(handle: ContentHandleRow): ContentHandleRow {
+    const accessedAt = nowIso();
+    handle.lastAccessedAt = accessedAt;
+    handle.accessCount += 1;
+
+    const pending = this.pendingHandleTouches.get(handle.id);
+    if (pending) {
+      pending.lastAccessedAt = accessedAt;
+      pending.accessCountDelta += 1;
+    } else {
+      this.pendingHandleTouches.set(handle.id, {
+        lastAccessedAt: accessedAt,
+        accessCountDelta: 1,
+      });
+    }
+
+    this.pendingHandleTouchCount += 1;
+    if (this.pendingHandleTouchCount >= HANDLE_TOUCH_FLUSH_LIMIT) {
+      this.flushPendingHandleTouches();
+    }
+
+    return { ...handle };
+  }
+
+  private flushPendingHandleTouches(): void {
+    if (this.pendingHandleTouches.size === 0) return;
+    const update = this.db.prepare(
+      'UPDATE content_handles SET last_accessed_at = ?, access_count = access_count + ? WHERE id = ? AND project_id = ?'
+    );
+    const flush = this.db.transaction(
+      (entries: Array<[string, { lastAccessedAt: string; accessCountDelta: number }]>) => {
+        for (const [id, touch] of entries) {
+          update.run(touch.lastAccessedAt, touch.accessCountDelta, id, this.projectId);
+        }
+      }
+    );
+    flush([...this.pendingHandleTouches.entries()]);
+    this.pendingHandleTouches.clear();
+    this.pendingHandleTouchCount = 0;
   }
 
   private afterWrite(): void {
     this.writesSinceCleanup += 1;
     if (this.writesSinceCleanup < DEFAULT_CONFIG.storage.cleanupEveryWrites) return;
     this.writesSinceCleanup = 0;
+    this.flushPendingHandleTouches();
     this.cleanup();
   }
 
@@ -1247,5 +1787,7 @@ export class AppState {
     this.db.prepare('DELETE FROM compression_events WHERE created_at < ?').run(cutoff);
     this.db.prepare('DELETE FROM session_events WHERE created_at < ?').run(cutoff);
     this.db.prepare('DELETE FROM session_snapshots WHERE generated_at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM terminal_runs WHERE created_at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM web_search_cache WHERE expires_at < ?').run(now);
   }
 }

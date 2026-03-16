@@ -1,4 +1,6 @@
 import { DEFAULT_CONFIG, type ResponseMode } from '../config/defaults.js';
+import { contextResourceLink } from '../resources/registry.js';
+import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { parsePositiveInteger, selectByQuery } from './file-selectors.js';
 import { loadPathOrHandle } from './source-loader.js';
 
@@ -15,7 +17,9 @@ export interface ReadReferencesToolInput {
   response_mode?: ResponseMode;
 }
 
-export async function readReferencesTool(input: ReadReferencesToolInput): Promise<string> {
+export async function readReferencesTool(
+  input: ReadReferencesToolInput
+): Promise<ToolExecutionResult | string> {
   if (!input.symbol?.trim()) {
     return 'Error: read_references requires "symbol"';
   }
@@ -51,5 +55,10 @@ export async function readReferencesTool(input: ReadReferencesToolInput): Promis
   ];
   if (loaded.fromHandle && responseMode === 'full') lines.push('handle: hit');
   lines.push(selected.text || '(no matches)');
-  return lines.join('\n');
+  return asToolResult(lines.join('\n'), {
+    sourceText: loaded.content,
+    candidateText: selected.text || lines.join('\n'),
+    comparisonBasis: 'full_file',
+    resourceLinks: [contextResourceLink(loaded.contextId, loaded.sourceLabel)],
+  });
 }

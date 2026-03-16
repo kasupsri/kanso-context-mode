@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG } from '../config/defaults.js';
 import { type ResponseMode } from '../config/defaults.js';
+import { contextResourceLink, kbResourceLink } from '../resources/registry.js';
 import { getAppState } from '../state/index.js';
 import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 
@@ -63,10 +64,18 @@ export async function searchTool(input: SearchToolInput): Promise<ToolExecutionR
     corpusStats.sourceTokens > 0
       ? `kb=${kbName}\nbytes=${corpusStats.sourceBytes}\ntokens=${corpusStats.sourceTokens}`
       : candidateSource;
+  const contextId =
+    candidateSource.trim().length > 0
+      ? getAppState().saveHandle(candidateSource, `kb_search:${kbName}:${input.query}`).id
+      : undefined;
 
   return asToolResult(text, {
     sourceText,
     candidateText: candidateSource || text,
     comparisonBasis: 'indexed_source',
+    resourceLinks: [
+      kbResourceLink(kbName),
+      ...(contextId ? [contextResourceLink(contextId, `kb_search:${kbName}:${input.query}`)] : []),
+    ],
   });
 }

@@ -4,11 +4,12 @@
 
 1. The MCP host calls a Kanso tool.
 2. The tool produces a raw local result.
-3. The response optimizer generates multiple compact candidates.
-4. Kanso picks the smallest valid result that still fits the token budget.
-5. The final response is returned to the host.
-6. A durable compression event is written to SQLite.
-7. Daily rollups are updated for project and global stats.
+3. High-volume tools can persist reusable state as `context://`, `run://`, `session://`, or `kb://` resources.
+4. The response optimizer generates multiple compact candidates for the text portion of the result.
+5. Kanso picks the smallest valid result that still fits the token budget.
+6. The final text plus any `resource_link` blocks are returned to the host.
+7. A durable compression event is written to SQLite.
+8. Daily rollups are updated for project and global stats.
 
 ## Disk-first state
 
@@ -21,6 +22,8 @@ Main tables:
 - `content_handles`
 - `compression_events`
 - `daily_rollups`
+- `terminal_runs`
+- `web_search_cache`
 
 Detailed events are retained for 30 days.
 Daily rollups are kept indefinitely.
@@ -37,6 +40,28 @@ That handle is:
 - backed by a tiny hot cache for repeated reads
 
 This keeps follow-up navigation fast without requiring large resident memory.
+
+## MCP surfaces
+
+Kanso now exposes more than tools:
+
+- resources for `context://`, `run://`, `session://`, and `kb://`
+- prompts for common workflows such as run summarization and diff review
+- completions for prompt arguments and resource template variables
+
+This lets hosts fetch the next piece of context instead of replaying the original raw output.
+
+## Terminal and web memory
+
+`execute` and `execute_file` can persist terminal runs with a saved output handle.
+
+That data powers:
+
+- `terminal_history`
+- `run_focus`
+- richer `session_resume` snapshots
+
+`web_search` results can be cached locally by provider + normalized query so repeated research loops avoid repeated remote fetches.
 
 ## Token estimation
 
@@ -95,8 +120,10 @@ Special handling exists for:
 
 The hot cache is intentionally limited:
 
-- 32 entries max
-- 4 MB max memory
-- 5 minute TTL
+- 96 entries max
+- 8 MB max memory
+- 10 minute TTL
+
+Handle access metadata is flushed in small batches, so repeated `context://` reads stay fast without losing the recent-access ordering that resource completions rely on.
 
 The source of truth always stays on disk.

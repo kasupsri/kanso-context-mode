@@ -27,7 +27,7 @@ function rawToolNudge(toolName?: string): string | null {
   if (!['bash', 'shell', 'read', 'grep', 'webfetch', 'task'].includes(normalized)) {
     return null;
   }
-  return 'Prefer kanso-context-mode tools for token-heavy work: execute, read_file, read_symbols, read_references, git_focus, diagnostics_focus, session_resume, and stats_report.';
+  return 'Prefer kanso-context-mode tools for token-heavy work: execute, read_file, read_symbols, read_references, workspace_search, tree_focus, git_focus, diagnostics_focus, terminal_history, run_focus, web_search, edit_targets, session_resume, and stats_report.';
 }
 
 function shellCommand(input: Record<string, unknown> | undefined): string | undefined {
@@ -102,6 +102,7 @@ function extractSessionEvents(payload: HookPayload): SessionEventRecord[] {
 
   const command = shellCommand(toolInput);
   if (command) {
+    push({ type: 'command', category: 'command', priority: 1, data: command });
     const gitOperation = extractGitOperation(command);
     if (gitOperation) {
       push({ type: 'git', category: 'git', priority: 2, data: gitOperation });
@@ -118,6 +119,22 @@ function extractSessionEvents(payload: HookPayload): SessionEventRecord[] {
       priority: 2,
       data: 'session resume requested',
     });
+  }
+
+  if (toolName === 'webfetch' || toolName === 'web_search') {
+    const target =
+      (typeof toolInput['url'] === 'string' && toolInput['url']) ||
+      (typeof toolInput['query'] === 'string' && toolInput['query']) ||
+      (typeof toolInput['prompt'] === 'string' && toolInput['prompt']) ||
+      '';
+    if (target) {
+      push({
+        type: 'web_lookup',
+        category: 'web',
+        priority: 1,
+        data: target,
+      });
+    }
   }
 
   if (output && /error|failed|exception|timeout/i.test(output)) {

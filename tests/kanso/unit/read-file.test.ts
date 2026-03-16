@@ -10,6 +10,19 @@ let stateDir: string | undefined;
 
 afterEach(() => cleanupTempStateDir(stateDir));
 
+function extractContextId(
+  result: string | { resourceLinks?: Array<{ uri: string }>; text: string }
+): string | undefined {
+  if (typeof result === 'string') {
+    return /context_id: (\S+)/.exec(result)?.[1];
+  }
+
+  const direct = /context_id: (\S+)/.exec(result.text)?.[1];
+  if (direct) return direct;
+  const resourceUri = result.resourceLinks?.find(link => link.uri.startsWith('context://'))?.uri;
+  return resourceUri?.replace('context://', '');
+}
+
 describe('disk-backed file handles', () => {
   it('persists context_id handles across app-state resets', async () => {
     stateDir = useTempStateDir();
@@ -30,16 +43,17 @@ describe('disk-backed file handles', () => {
     );
 
     const first = await readFileTool({ path: filePath, query: 'beta', response_mode: 'full' });
-    const match = /context_id: (\S+)/.exec(first);
-    expect(match?.[1]).toBeTruthy();
+    const contextId = extractContextId(first);
+    expect(contextId).toBeTruthy();
 
     const second = await readReferencesTool({
-      context_id: match?.[1],
+      context_id: contextId,
       symbol: 'beta',
       response_mode: 'full',
     });
 
-    expect(second).toContain('beta');
-    expect(second).toContain('context_id:');
+    const text = typeof second === 'string' ? second : second.text;
+    expect(text).toContain('beta');
+    expect(text).toContain('context_id:');
   });
 });

@@ -1,6 +1,6 @@
-interface HotCacheEntry {
+interface HotCacheEntry<T> {
   id: string;
-  content: string;
+  value: T;
   bytes: number;
   expiresAt: number;
 }
@@ -16,8 +16,8 @@ export interface HotCacheStats {
   ttlMs: number;
 }
 
-export class HotHandleCache {
-  private readonly entries = new Map<string, HotCacheEntry>();
+export class HotHandleCache<T> {
+  private readonly entries = new Map<string, HotCacheEntry<T>>();
   private readonly maxEntries: number;
   private readonly maxBytes: number;
   private readonly ttlMs: number;
@@ -31,7 +31,7 @@ export class HotHandleCache {
     this.ttlMs = Math.max(0, options.ttlMs);
   }
 
-  get(id: string): string | undefined {
+  get(id: string): T | undefined {
     this.pruneExpired();
     const entry = this.entries.get(id);
     if (!entry) {
@@ -42,15 +42,14 @@ export class HotHandleCache {
     this.entries.delete(id);
     this.entries.set(id, entry);
     this.hits += 1;
-    return entry.content;
+    return entry.value;
   }
 
-  put(id: string, content: string): void {
+  put(id: string, value: T, bytes: number): void {
     if (this.maxEntries === 0 || this.maxBytes === 0 || this.ttlMs === 0) {
       return;
     }
 
-    const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > this.maxBytes) {
       return;
     }
@@ -61,9 +60,9 @@ export class HotHandleCache {
       this.entries.delete(id);
     }
 
-    const entry: HotCacheEntry = {
+    const entry: HotCacheEntry<T> = {
       id,
-      content,
+      value,
       bytes,
       expiresAt: Date.now() + this.ttlMs,
     };
@@ -109,5 +108,12 @@ export class HotHandleCache {
       this.entries.delete(oldest);
       if (entry) this.currentBytes -= entry.bytes;
     }
+  }
+
+  delete(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.entries.delete(id);
+    this.currentBytes -= entry.bytes;
   }
 }

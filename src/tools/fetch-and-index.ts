@@ -7,7 +7,8 @@ import { asToolResult, type ToolExecutionResult } from './tool-result.js';
 import { APP_VERSION } from '../version.js';
 
 export interface FetchAndIndexToolInput {
-  url: string;
+  url?: string;
+  urls?: string[];
   kb_name?: string;
   chunk_size?: number;
   max_output_tokens?: number;
@@ -211,42 +212,78 @@ async function fetchAndConvertToMarkdown(url: string): Promise<string> {
 export async function fetchAndIndexTool(
   input: FetchAndIndexToolInput
 ): Promise<ToolExecutionResult> {
-  const { url, kb_name = 'default', chunk_size } = input;
+  const { kb_name = 'default', chunk_size } = input;
   const chunkSize =
     typeof chunk_size === 'number' && Number.isFinite(chunk_size) && chunk_size > 0
       ? Math.floor(chunk_size)
       : DEFAULT_CONFIG.knowledgeBase.maxChunkSize;
-
-  let markdown: string;
-  try {
-    markdown = await fetchAndConvertToMarkdown(url);
-  } catch (err) {
-    return asToolResult(`Error fetching "${url}": ${String(err)}`, {
-      candidateText: `Error fetching "${url}": ${String(err)}`,
+  const requestedUrls = [
+    ...(input.url?.trim() ? [input.url.trim()] : []),
+    ...((input.urls ?? []).map(url => url.trim()).filter(Boolean) ?? []),
+  ];
+  const urls = [...new Set(requestedUrls)].slice(0, 5);
+  if (urls.length === 0) {
+    return asToolResult('Error: fetch_and_index requires "url" or "urls"', {
+      candidateText: 'Error: fetch_and_index requires "url" or "urls"',
     });
   }
 
-  const result = getAppState().indexKnowledgeText(markdown, {
-    source: url,
-    kbName: kb_name,
-    chunkSize,
-  });
+  const successes: Array<{
+    url: string;
+    markdown: string;
+    chunksIndexed: number;
+    wordCount: number;
+  }> = [];
+  const failures: string[] = [];
+
+  for (const url of urls) {
+    try {
+      const markdown = await fetchAndConvertToMarkdown(url);
+      const result = getAppState().indexKnowledgeText(markdown, {
+        source: url,
+        kbName: kb_name,
+        chunkSize,
+      });
+      successes.push({
+        url,
+        markdown,
+        chunksIndexed: result.chunksIndexed,
+        wordCount: markdown.split(/\s+/).length,
+      });
+    } catch (err) {
+      failures.push(`Error fetching "${url}": ${String(err)}`);
+    }
+  }
+
+  if (successes.length === 0) {
+    return asToolResult(failures.join('\n'), {
+      candidateText: failures.join('\n'),
+    });
+  }
+
   const stats = getAppState().getKnowledgeStats(kb_name);
-  const wordCount = markdown.split(/\s+/).length;
+  const totalWords = successes.reduce((sum, item) => sum + item.wordCount, 0);
+  const totalChunks = successes.reduce((sum, item) => sum + item.chunksIndexed, 0);
+  const combinedMarkdown = successes.map(item => `# ${item.url}\n\n${item.markdown}`).join('\n\n');
 
   const responseMode = input.response_mode ?? DEFAULT_CONFIG.compression.responseMode;
   const text =
     responseMode === 'full'
       ? [
-          `Fetched and indexed "${url}"`,
-          `Content: ~${wordCount.toLocaleString()} words converted to ${result.chunksIndexed} searchable chunks.`,
+          `Fetched and indexed ${successes.length} URL(s)`,
+          ...successes.map(
+            item =>
+              `- ${item.url}: ~${item.wordCount.toLocaleString()} words -> ${item.chunksIndexed} chunk(s)`
+          ),
+          failures.length > 0 ? `Failures: ${failures.length}` : '',
           `Knowledge base "${kb_name}": ${stats.chunkCount} total chunks from ${stats.sources} source(s).`,
           `Use search to query: search({ query: "your question", kb_name: "${kb_name}" })`,
+          ...failures,
         ].join('\n')
-      : `ok:fetch_index chunks=${result.chunksIndexed} words=${wordCount} kb=${kb_name} total=${stats.chunkCount} srcs=${stats.sources}`;
+      : `ok:fetch_index urls=${successes.length} chunks=${totalChunks} words=${totalWords} kb=${kb_name} total=${stats.chunkCount} srcs=${stats.sources}`;
 
   return asToolResult(text, {
-    sourceText: markdown,
+    sourceText: combinedMarkdown,
     candidateText: text,
     comparisonBasis: 'indexed_source',
   });

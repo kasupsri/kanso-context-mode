@@ -63,6 +63,7 @@ export function doctorTool(input: DoctorToolInput = {}): string {
     `Handle TTL: ${DEFAULT_CONFIG.storage.handleTtlHours} hours`,
     `Hot cache budget: ${DEFAULT_CONFIG.storage.hotCacheMB} MB / ${DEFAULT_CONFIG.storage.hotCacheEntries} entries`,
     `Hot cache TTL: ${Math.round(DEFAULT_CONFIG.storage.hotCacheTtlMs / 1000)} seconds`,
+    `Cleanup cadence: every ${DEFAULT_CONFIG.storage.cleanupEveryWrites} writes`,
     `Session max events: ${DEFAULT_CONFIG.storage.sessionMaxEvents}`,
     `Session snapshot budget: ${DEFAULT_CONFIG.storage.sessionSnapshotBytes} bytes`,
     `Token estimator: ${profile.active} (${profile.method})`,

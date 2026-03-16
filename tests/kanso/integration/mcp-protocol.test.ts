@@ -9,6 +9,12 @@ import { cleanupTempStateDir, useTempStateDir } from '../test-helpers.js';
 
 const extractText = (result: { content?: unknown }): string =>
   ((result.content as Array<{ type: string; text: string }>)[0]?.text ?? '') as string;
+const extractResourceLinks = (result: {
+  content?: unknown;
+}): Array<{ uri: string; name?: string }> =>
+  ((result.content as Array<{ type: string; uri: string; name?: string }>) ?? []).filter(
+    item => item.type === 'resource_link'
+  );
 
 describe('MCP protocol', () => {
   let client: Client;
@@ -31,7 +37,7 @@ describe('MCP protocol', () => {
     cleanupTempStateDir(cleanupDir);
   });
 
-  it('lists the Kanso v1 tool surface', async () => {
+  it('lists the expanded Kanso tool surface', async () => {
     const { tools } = await client.listTools();
     const names = tools.map(tool => tool.name).sort();
 
@@ -39,6 +45,7 @@ describe('MCP protocol', () => {
       'compress',
       'diagnostics_focus',
       'doctor',
+      'edit_targets',
       'execute',
       'execute_file',
       'fetch_and_index',
@@ -47,11 +54,32 @@ describe('MCP protocol', () => {
       'read_file',
       'read_references',
       'read_symbols',
+      'rewrite_preview',
+      'run_focus',
       'search',
       'session_resume',
       'stats_export',
       'stats_report',
       'stats_reset',
+      'structure_search',
+      'terminal_history',
+      'tree_focus',
+      'web_search',
+      'workspace_search',
+    ]);
+  });
+
+  it('exposes resources and prompts for the new MCP surface', async () => {
+    const resources = await client.listResources();
+    expect(resources.resources.some(resource => resource.uri.startsWith('session://'))).toBe(true);
+
+    const prompts = await client.listPrompts();
+    const promptNames = prompts.prompts.map(prompt => prompt.name).sort();
+    expect(promptNames).toEqual([
+      'draft_commit_message',
+      'research_topic',
+      'review_diff',
+      'summarize_run',
     ]);
   });
 
@@ -90,8 +118,10 @@ describe('MCP protocol', () => {
       name: 'read_file',
       arguments: { path: filePath, query: 'fastPath', response_mode: 'full' },
     });
-    const text = extractText(first);
-    const contextId = /context_id: (\S+)/.exec(text)?.[1];
+    const resourceUri = extractResourceLinks(first).find(link =>
+      link.uri.startsWith('context://')
+    )?.uri;
+    const contextId = resourceUri?.replace('context://', '');
 
     expect(contextId).toBeTruthy();
 

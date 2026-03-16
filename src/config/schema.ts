@@ -29,6 +29,12 @@ const TOKEN_PROFILES: ReadonlySet<KansoConfig['tokens']['profile']> = new Set([
   'openai_cl100k',
   'generic',
 ]);
+const WEB_PROVIDERS: ReadonlySet<KansoConfig['web']['provider']> = new Set([
+  'off',
+  'brave_context',
+  'firecrawl_search',
+  'exa',
+]);
 
 function asObject(input: unknown): Record<string, unknown> | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -87,6 +93,10 @@ export function parseConfig(input: unknown): KansoConfig {
     knowledgeBase: {
       ...DEFAULT_CONFIG.knowledgeBase,
       ...(partial.knowledgeBase ?? {}),
+    },
+    web: {
+      ...DEFAULT_CONFIG.web,
+      ...(partial.web ?? {}),
     },
   };
 }
@@ -180,6 +190,24 @@ export function loadConfigFromEnv(): DeepPartial<KansoConfig> {
     config.storage.hotCacheMB = hotCacheMB;
   }
 
+  const hotCacheEntries = parsePositiveInt(process.env['KCM_HOT_CACHE_ENTRIES']);
+  if (hotCacheEntries !== undefined) {
+    config.storage = config.storage ?? {};
+    config.storage.hotCacheEntries = hotCacheEntries;
+  }
+
+  const hotCacheTtlMs = parsePositiveInt(process.env['KCM_HOT_CACHE_TTL_MS']);
+  if (hotCacheTtlMs !== undefined) {
+    config.storage = config.storage ?? {};
+    config.storage.hotCacheTtlMs = hotCacheTtlMs;
+  }
+
+  const cleanupEveryWrites = parsePositiveInt(process.env['KCM_CLEANUP_EVERY_WRITES']);
+  if (cleanupEveryWrites !== undefined) {
+    config.storage = config.storage ?? {};
+    config.storage.cleanupEveryWrites = cleanupEveryWrites;
+  }
+
   const sessionMaxEvents = parsePositiveInt(process.env['KCM_SESSION_MAX_EVENTS']);
   if (sessionMaxEvents !== undefined) {
     config.storage = config.storage ?? {};
@@ -202,6 +230,39 @@ export function loadConfigFromEnv(): DeepPartial<KansoConfig> {
   if (maxFetchBytes !== undefined) {
     config.knowledgeBase = config.knowledgeBase ?? {};
     config.knowledgeBase.maxFetchBytes = maxFetchBytes;
+  }
+
+  const webProvider = process.env['KCM_WEB_SEARCH_PROVIDER'];
+  if (webProvider && WEB_PROVIDERS.has(webProvider as KansoConfig['web']['provider'])) {
+    config.web = config.web ?? {};
+    config.web.provider = webProvider as KansoConfig['web']['provider'];
+  }
+
+  const webSearchTtlHours = parsePositiveInt(process.env['KCM_WEB_SEARCH_TTL_HOURS']);
+  if (webSearchTtlHours !== undefined) {
+    config.web = config.web ?? {};
+    config.web.cacheTtlHours = webSearchTtlHours;
+  }
+
+  const webSearchMaxResults = parsePositiveInt(process.env['KCM_WEB_SEARCH_MAX_RESULTS']);
+  if (webSearchMaxResults !== undefined) {
+    config.web = config.web ?? {};
+    config.web.maxResults = webSearchMaxResults;
+  }
+
+  if (process.env['KCM_BRAVE_API_KEY']) {
+    config.web = config.web ?? {};
+    config.web.braveApiKey = process.env['KCM_BRAVE_API_KEY'];
+  }
+
+  if (process.env['KCM_FIRECRAWL_API_KEY']) {
+    config.web = config.web ?? {};
+    config.web.firecrawlApiKey = process.env['KCM_FIRECRAWL_API_KEY'];
+  }
+
+  if (process.env['KCM_EXA_API_KEY']) {
+    config.web = config.web ?? {};
+    config.web.exaApiKey = process.env['KCM_EXA_API_KEY'];
   }
 
   if (process.env['KCM_STATS_EXPORT_PATH']) {
